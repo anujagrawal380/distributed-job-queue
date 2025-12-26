@@ -9,6 +9,9 @@ services:
     volumes:
       - ./data:/app/data  # WAL persistence across restarts
     environment:
-      - PORT=8080
-      - WAL_DIR=/app/data
-    restart: unless-stopped
+      # Server configuration
+      - PORT=8080                        # HTTP server port
+      - WAL_DIR=/app/data                # Write-Ahead Log directory
+      - LEASE_DURATION=30s               # How long workers can hold a job
+      - LEASE_CHECK_INTERVAL=5s          # How often to check for expired leases
+    restart: unless-stopped              # Auto-restart on crash (not on manual stop)
