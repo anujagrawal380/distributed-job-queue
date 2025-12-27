@@ -43,7 +43,7 @@ func (c *Core) recoverFromWAL() error {
 		}
 	}
 
-	// Move RUNNING jobs to RETRY (they died during crash)
+	// Move RUNNING jobs to RETRY, then back to READY (they died during crash)
 	for _, job := range c.jobs {
 		if job.State == StateRunning {
 			job.State = StateRetry
@@ -144,9 +144,15 @@ func (c *Core) leaseJob(job *Job, duration time.Duration) (*Job, error) {
 }
 
 // Ack marks a job as completed
-func (c *Core) Ack(jobID string) error {
+func (c *Core) Ack(jobID string, result []byte, resultError string) error {
 	if jobID == "" {
 		return fmt.Errorf("job_id cannot be empty")
+	}
+
+	// TODO: Add Environment Configurable Result Size Limit
+	const MaxResultSize = 1024 * 1024 // 1MB
+	if len(result) > MaxResultSize {
+		return fmt.Errorf("result too large (max 1MB)")
 	}
 
 	c.mu.Lock()
@@ -162,10 +168,17 @@ func (c *Core) Ack(jobID string) error {
 	}
 
 	job.State = StateAcked
+	job.Result = result
+	job.ResultError = resultError
 	job.UpdatedAt = time.Now()
 
+	metadata := map[string]interface{}{
+		"result":       string(result),
+		"result_error": resultError,
+	}
+
 	// Write to WAL
-	entry := wal.NewEntry(job.ID, wal.EventJobAcked, nil)
+	entry := wal.NewEntry(job.ID, wal.EventJobAcked, metadata)
 	if err := c.wal.Append(entry); err != nil {
 		return err
 	}
@@ -260,6 +273,17 @@ func (c *Core) applyJobAcked(entry *wal.Entry) error {
 
 	job.State = StateAcked
 	job.UpdatedAt = time.Unix(entry.Timestamp, 0)
+
+	// Restore result and error if present
+	if entry.Metadata != nil {
+		if result, ok := entry.Metadata["result"].(string); ok {
+			job.Result = []byte(result)
+		}
+		if resultError, ok := entry.Metadata["result_error"].(string); ok {
+			job.ResultError = resultError
+		}
+	}
+
 	return nil
 }
 

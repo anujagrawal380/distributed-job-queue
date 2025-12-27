@@ -35,6 +35,11 @@ type SubmitJobResponse struct {
 	JobID string `json:"job_id"`
 }
 
+type AckJobRequest struct {
+	Result      string `json:"result,omitempty"`
+	ResultError string `json:"result_error,omitempty"`
+}
+
 // LeaseJobResponse represents the lease response
 type LeaseJobResponse struct {
 	JobID      string    `json:"job_id"`
@@ -142,8 +147,18 @@ func (s *Server) HandleAckJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Ack the job
-	if err := s.core.Ack(jobID); err != nil {
+	// Parse request body
+	var req AckJobRequest
+	if r.Body != nil {
+		body, err := io.ReadAll(r.Body)
+		if err == nil && len(body) > 0 {
+			json.Unmarshal(body, &req)
+		}
+		r.Body.Close()
+	}
+
+	// Ack the job with result
+	if err := s.core.Ack(jobID, []byte(req.Result), req.ResultError); err != nil {
 		s.sendError(w, fmt.Sprintf("failed to ack job: %v", err), http.StatusBadRequest)
 		return
 	}

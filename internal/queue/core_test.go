@@ -214,17 +214,65 @@ func TestAck(t *testing.T) {
 		name          string
 		setup         func(*Core) string // Returns job ID to ack
 		jobID         string             // Used if setup is nil
+		result        []byte
+		resultError   string
 		wantErr       bool
 		errContains   string
 		expectedState JobState
 	}{
 		{
-			name: "ack running job",
+			name: "ack running job with result",
 			setup: func(c *Core) string {
 				id, _ := c.Submit([]byte("test"), 3)
 				c.Lease(30 * time.Second)
 				return id
 			},
+			result:        []byte("processed successfully"),
+			wantErr:       false,
+			expectedState: StateAcked,
+		},
+		{
+			name: "ack running job with error",
+			setup: func(c *Core) string {
+				id, _ := c.Submit([]byte("test"), 3)
+				c.Lease(30 * time.Second)
+				return id
+			},
+			resultError:   "processing failed",
+			wantErr:       false,
+			expectedState: StateAcked,
+		},
+		{
+			name: "ack with both result and error",
+			setup: func(c *Core) string {
+				id, _ := c.Submit([]byte("test"), 3)
+				c.Lease(30 * time.Second)
+				return id
+			},
+			result:        []byte("partial output"),
+			resultError:   "completed with warnings",
+			wantErr:       false,
+			expectedState: StateAcked,
+		},
+		{
+			name: "ack with empty result (valid)",
+			setup: func(c *Core) string {
+				id, _ := c.Submit([]byte("test"), 3)
+				c.Lease(30 * time.Second)
+				return id
+			},
+			result:        []byte(""),
+			wantErr:       false,
+			expectedState: StateAcked,
+		},
+		{
+			name: "ack with nil result (valid)",
+			setup: func(c *Core) string {
+				id, _ := c.Submit([]byte("test"), 3)
+				c.Lease(30 * time.Second)
+				return id
+			},
+			result:        nil,
 			wantErr:       false,
 			expectedState: StateAcked,
 		},
@@ -234,6 +282,7 @@ func TestAck(t *testing.T) {
 				id, _ := c.Submit([]byte("test"), 3)
 				return id
 			},
+			result:      []byte("result"),
 			wantErr:     true,
 			errContains: "job cannot be acked",
 		},
@@ -242,21 +291,24 @@ func TestAck(t *testing.T) {
 			setup: func(c *Core) string {
 				id, _ := c.Submit([]byte("test"), 3)
 				c.Lease(30 * time.Second)
-				c.Ack(id)
+				c.Ack(id, []byte("first result"), "")
 				return id
 			},
+			result:      []byte("second result"),
 			wantErr:     true,
 			errContains: "job cannot be acked",
 		},
 		{
 			name:        "ack non-existent job",
 			jobID:       "non-existent-id",
+			result:      []byte("result"),
 			wantErr:     true,
 			errContains: "job not found",
 		},
 		{
 			name:        "ack empty job ID",
 			jobID:       "",
+			result:      []byte("result"),
 			wantErr:     true,
 			errContains: "job_id cannot be empty",
 		},
@@ -273,7 +325,7 @@ func TestAck(t *testing.T) {
 				jobID = tt.jobID
 			}
 
-			err := core.Ack(jobID)
+			err := core.Ack(jobID, tt.result, tt.resultError)
 
 			if tt.wantErr {
 				assert.Error(t, err)
@@ -283,9 +335,11 @@ func TestAck(t *testing.T) {
 
 			require.NoError(t, err)
 
-			// Verify state
+			// Verify state and result
 			job, _ := core.GetJob(jobID)
 			assert.Equal(t, tt.expectedState, job.State)
+			assert.Equal(t, tt.result, job.Result)
+			assert.Equal(t, tt.resultError, job.ResultError)
 		})
 	}
 }
@@ -450,7 +504,14 @@ func TestWALRecovery(t *testing.T) {
 
 		job, err := core2.GetJob(id)
 		require.NoError(t, err)
-		assert.Equal(t, StateRetry, job.State)
+		assert.Equal(t, StateRetry, job.State, "running job should become RETRY after crash")
+
+		// Verify it can still be leased from RETRY state
+		leasedJob, err := core2.Lease(30 * time.Second)
+		require.NoError(t, err)
+		assert.Equal(t, id, leasedJob.ID, "should be able to lease job in RETRY state")
+		assert.Equal(t, StateRunning, leasedJob.State)
+		assert.Equal(t, 2, leasedJob.Attempts, "should have 2 attempts (1 before crash + 1 after)") // Changed from 1 to 2
 
 		w2.Close()
 	})
@@ -463,7 +524,7 @@ func TestWALRecovery(t *testing.T) {
 		core1, _ := NewCore(w1)
 		id, _ := core1.Submit([]byte("job"), 3)
 		core1.Lease(30 * time.Second)
-		core1.Ack(id)
+		core1.Ack(id, nil, "")
 		w1.Close()
 
 		// Second core - recover
@@ -494,7 +555,7 @@ func TestWALRecovery(t *testing.T) {
 
 		// Lease another job and ack it (becomes ACKED)
 		leased, _ := core1.Lease(30 * time.Second)
-		core1.Ack(leased.ID)
+		core1.Ack(leased.ID, nil, "")
 
 		// Now we have: 1 READY, 1 RUNNING, 1 ACKED
 		w1.Close()
@@ -519,6 +580,144 @@ func TestWALRecovery(t *testing.T) {
 		assert.Equal(t, 3, len(core2.jobs), "should have 3 total jobs")
 
 		w2.Close()
+	})
+
+	t.Run("recover job with max retries exhausted", func(t *testing.T) {
+		tmpDir := t.TempDir()
+
+		// First core - create job with 0 retries and lease it
+		w1, _ := wal.Open(tmpDir)
+		core1, _ := NewCore(w1)
+		id, _ := core1.Submit([]byte("job"), 0) // No retries allowed
+		core1.Lease(30 * time.Second)
+		w1.Close()
+
+		// Second core - recover (should become RETRY but not leasable since attempts >= maxRetries)
+		w2, _ := wal.Open(tmpDir)
+		core2, _ := NewCore(w2)
+
+		job, err := core2.GetJob(id)
+		require.NoError(t, err)
+		assert.Equal(t, StateRetry, job.State)
+		assert.Equal(t, 1, job.Attempts)
+		assert.Equal(t, 0, job.MaxRetries)
+
+		w2.Close()
+	})
+
+	t.Run("recover job with result", func(t *testing.T) {
+		tmpDir := t.TempDir()
+
+		// First core - create, lease, and ack job with result
+		w1, _ := wal.Open(tmpDir)
+		core1, _ := NewCore(w1)
+		id, _ := core1.Submit([]byte("job"), 3)
+		core1.Lease(30 * time.Second)
+		core1.Ack(id, []byte("success output"), "")
+		w1.Close()
+
+		// Second core - recover
+		w2, _ := wal.Open(tmpDir)
+		core2, _ := NewCore(w2)
+
+		job, err := core2.GetJob(id)
+		require.NoError(t, err)
+		assert.Equal(t, StateAcked, job.State)
+		assert.Equal(t, []byte("success output"), job.Result)
+		assert.Empty(t, job.ResultError)
+		w2.Close()
+	})
+
+	t.Run("recover job with error", func(t *testing.T) {
+		tmpDir := t.TempDir()
+
+		// First core - ack job with error
+		w1, _ := wal.Open(tmpDir)
+		core1, _ := NewCore(w1)
+		id, _ := core1.Submit([]byte("job"), 3)
+		core1.Lease(30 * time.Second)
+		core1.Ack(id, nil, "connection timeout")
+		w1.Close()
+
+		// Second core - recover
+		w2, _ := wal.Open(tmpDir)
+		core2, _ := NewCore(w2)
+
+		job, err := core2.GetJob(id)
+		require.NoError(t, err)
+		assert.Equal(t, StateAcked, job.State)
+		assert.Empty(t, job.Result)
+		assert.Equal(t, "connection timeout", job.ResultError)
+
+		w2.Close()
+	})
+
+	t.Run("recover job with both result and error", func(t *testing.T) {
+		tmpDir := t.TempDir()
+
+		// First core - ack job with partial result and error
+		w1, _ := wal.Open(tmpDir)
+		core1, _ := NewCore(w1)
+		id, _ := core1.Submit([]byte("job"), 3)
+		core1.Lease(30 * time.Second)
+		core1.Ack(id, []byte("partial data"), "warning: incomplete")
+		w1.Close()
+
+		// Second core - recover
+		w2, _ := wal.Open(tmpDir)
+		core2, _ := NewCore(w2)
+
+		job, err := core2.GetJob(id)
+		require.NoError(t, err)
+		assert.Equal(t, StateAcked, job.State)
+		assert.Equal(t, []byte("partial data"), job.Result)
+		assert.Equal(t, "warning: incomplete", job.ResultError)
+
+		w2.Close()
+	})
+}
+
+// Add new test for leasing RETRY jobs
+func TestLeaseRetryJobs(t *testing.T) {
+	t.Run("can lease job in retry state", func(t *testing.T) {
+		core, _ := setupTestCore(t)
+
+		// Submit a job
+		jobID, _ := core.Submit([]byte("test"), 3)
+
+		// Manually set it to RETRY state
+		core.mu.Lock()
+		core.jobs[jobID].State = StateRetry
+		core.jobs[jobID].Attempts = 1
+		core.mu.Unlock()
+
+		// Should be able to lease it
+		job, err := core.Lease(30 * time.Second)
+		require.NoError(t, err)
+		assert.Equal(t, jobID, job.ID)
+		assert.Equal(t, StateRunning, job.State)
+		assert.Equal(t, 2, job.Attempts, "attempts should increment")
+	})
+
+	t.Run("retry state is leasable", func(t *testing.T) {
+		core, _ := setupTestCore(t)
+
+		// Create job and manually set to RETRY
+		jobID, _ := core.Submit([]byte("test"), 3)
+		core.mu.Lock()
+		job := core.jobs[jobID]
+		job.State = StateRetry
+		job.Attempts = 2
+		core.mu.Unlock()
+
+		// Verify CanLease returns true for RETRY
+		assert.True(t, job.CanLease(), "job in RETRY state should be leasable")
+
+		// Actually lease it
+		leasedJob, err := core.Lease(30 * time.Second)
+		require.NoError(t, err)
+		assert.Equal(t, jobID, leasedJob.ID)
+		assert.Equal(t, 3, leasedJob.Attempts)
 	})
 }
 

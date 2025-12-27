@@ -19,14 +19,16 @@ const (
 
 // Job represents a job in the queue
 type Job struct {
-	ID         string    `json:"job_id"`
-	Payload    []byte    `json:"payload"`
-	State      JobState  `json:"state"`
-	MaxRetries int       `json:"max_retries"`
-	Attempts   int       `json:"attempts"`
-	LeaseUntil time.Time `json:"lease_until,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
+	ID          string    `json:"job_id"`
+	Payload     []byte    `json:"payload"`
+	State       JobState  `json:"state"`
+	MaxRetries  int       `json:"max_retries"`
+	Attempts    int       `json:"attempts"`
+	LeaseUntil  time.Time `json:"lease_until,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
+	Result      []byte    `json:"result,omitempty"`
+	ResultError string    `json:"result_error,omitempty"`
 }
 
 // NewJob creates a new job with default values
@@ -45,7 +47,7 @@ func NewJob(payload []byte, maxRetries int) *Job {
 
 // CanLease checks if a job can be leased
 func (j *Job) CanLease() bool {
-	return j.State == StateReady
+	return j.State == StateReady || j.State == StateRetry
 }
 
 // CanAck checks if a job can be acknowledged
