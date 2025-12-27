@@ -35,6 +35,7 @@ type SubmitJobResponse struct {
 	JobID string `json:"job_id"`
 }
 
+// AckJobRequest represents the job acknowledgment request
 type AckJobRequest struct {
 	Result      string `json:"result,omitempty"`
 	ResultError string `json:"result_error,omitempty"`
@@ -50,12 +51,14 @@ type LeaseJobResponse struct {
 
 // JobStatusResponse represents the job status response
 type JobStatusResponse struct {
-	JobID      string         `json:"job_id"`
-	State      queue.JobState `json:"state"`
-	Attempts   int            `json:"attempts"`
-	MaxRetries int            `json:"max_retries"`
-	CreatedAt  time.Time      `json:"created_at"`
-	LeaseUntil *time.Time     `json:"lease_until,omitempty"`
+	JobID       string         `json:"job_id"`
+	State       queue.JobState `json:"state"`
+	Attempts    int            `json:"attempts"`
+	MaxRetries  int            `json:"max_retries"`
+	CreatedAt   time.Time      `json:"created_at"`
+	LeaseUntil  *time.Time     `json:"lease_until,omitempty"`
+	Result      string         `json:"result,omitempty"`
+	ResultError string         `json:"result_error,omitempty"`
 }
 
 // ErrorResponse represents an error response
@@ -194,12 +197,14 @@ func (s *Server) HandleGetJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := JobStatusResponse{
-		JobID:      job.ID,
-		State:      job.State,
-		Attempts:   job.Attempts,
-		MaxRetries: job.MaxRetries,
-		CreatedAt:  job.CreatedAt,
-		LeaseUntil: leaseUntil,
+		JobID:       job.ID,
+		State:       job.State,
+		Attempts:    job.Attempts,
+		MaxRetries:  job.MaxRetries,
+		CreatedAt:   job.CreatedAt,
+		LeaseUntil:  leaseUntil,
+		Result:      string(job.Result),
+		ResultError: job.ResultError,
 	}
 
 	s.sendJSON(w, response, http.StatusOK)
