@@ -14,4 +14,27 @@ services:
       - WAL_DIR=/app/data                # Write-Ahead Log directory
       - LEASE_DURATION=30s               # How long workers can hold a job
       - LEASE_CHECK_INTERVAL=5s          # How often to check for expired leases
+      # Redis configuration
+      - REDIS_URL=redis:6379             # Redis connection URL
+    depends_on:
+      - redis
     restart: unless-stopped              # Auto-restart on crash (not on manual stop)
+
+  redis:
+    image: redis:7-alpine
+    container_name: job-queue-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes --appendfsync everysec
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  redis-data:
+    driver: local
