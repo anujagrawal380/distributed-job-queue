@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/anujagrawal380/distributed-job-queue/internal/api"
+	"github.com/anujagrawal380/distributed-job-queue/internal/auth"
 	"github.com/anujagrawal380/distributed-job-queue/internal/queue"
 	redisclient "github.com/anujagrawal380/distributed-job-queue/internal/redis"
 	"github.com/anujagrawal380/distributed-job-queue/internal/wal"
@@ -58,6 +59,16 @@ func main() {
 				stats.Hits, stats.Misses, stats.Timeouts, stats.TotalConns, stats.IdleConns)
 		}
 	}()
+
+	// Create auth store
+	authStore := auth.NewRedisStore(redisClient.GetClient())
+	log.Printf("Auth store initialized")
+
+	// Seed development keys (for DEV testing ONLY)
+	ctx := context.Background()
+	if err := auth.SeedDevKeys(ctx, authStore); err != nil {
+		log.Fatalf("Failed to seed dev keys: %v", err)
+	}
 
 	// Open WAL
 	w, err := wal.Open(walDir)
