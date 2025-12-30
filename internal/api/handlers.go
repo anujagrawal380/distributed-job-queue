@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
+	"github.com/anujagrawal380/distributed-job-queue/internal/auth"
 	"github.com/anujagrawal380/distributed-job-queue/internal/queue"
 )
 
@@ -14,13 +16,15 @@ import (
 type Server struct {
 	core          *queue.Core
 	leaseDuration time.Duration
+	authStore     auth.Store
 }
 
 // NewServer creates a new API server
-func NewServer(core *queue.Core, leaseDuration time.Duration) *Server {
+func NewServer(core *queue.Core, leaseDuration time.Duration, authStore auth.Store) *Server {
 	return &Server{
 		core:          core,
 		leaseDuration: leaseDuration,
+		authStore:     authStore,
 	}
 }
 
@@ -233,17 +237,28 @@ func (s *Server) sendError(w http.ResponseWriter, message string, statusCode int
 	s.sendJSON(w, ErrorResponse{Error: message}, statusCode)
 }
 
-// RegisterRoutes registers all HTTP routes
+// RegisterRoutes registers all HTTP routes with authentication
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
+	// Health check (no auth required)
 	mux.HandleFunc("/health", s.HandleHealth)
-	mux.HandleFunc("/jobs", s.HandleSubmitJob)
-	mux.HandleFunc("/jobs/lease", s.HandleLeaseJob)
-	mux.HandleFunc("/jobs/", func(w http.ResponseWriter, r *http.Request) {
+
+	// Auth middleware wrapper
+	authMW := AuthMiddleware(s.authStore)
+
+	// Jobs endpoints (require auth + specific scopes)
+	mux.Handle("/jobs", authMW(RequireScope(auth.ScopeJobsSubmit)(http.HandlerFunc(s.HandleSubmitJob))))
+
+	mux.Handle("/jobs/lease", authMW(RequireScope(auth.ScopeJobsLease)(http.HandlerFunc(s.HandleLeaseJob))))
+
+	// Jobs/{id} routes need custom handling (GET vs POST /ack)
+	mux.Handle("/jobs/", authMW(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Route to either GET /jobs/{id} or POST /jobs/{id}/ack
-		if r.URL.Path[len(r.URL.Path)-4:] == "/ack" {
-			s.HandleAckJob(w, r)
+		if strings.HasSuffix(r.URL.Path, "/ack") {
+			// Require jobs:ack scope for ack endpoint
+			RequireScope(auth.ScopeJobsAck)(http.HandlerFunc(s.HandleAckJob)).ServeHTTP(w, r)
 		} else {
-			s.HandleGetJob(w, r)
+			// Require jobs:read scope for get job endpoint
+			RequireScope(auth.ScopeJobsRead)(http.HandlerFunc(s.HandleGetJob)).ServeHTTP(w, r)
 		}
-	})
+	})))
 }

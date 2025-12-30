@@ -85,7 +85,7 @@ func main() {
 	log.Printf("Queue core initialized (WAL recovered)")
 
 	// Create API server
-	server := api.NewServer(core, leaseDuration)
+	server := api.NewServer(core, leaseDuration, authStore)
 
 	// Register routes
 	mux := http.NewServeMux()

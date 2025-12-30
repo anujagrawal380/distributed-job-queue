@@ -6,6 +6,7 @@ A durable, crash-resistant job queue system built in Go with Write-Ahead Log (WA
 
 - **Durable**: All jobs persisted to disk via Write-Ahead Log
 - **Crash Recovery**: Automatically recovers state on restart
+- **Authentication**: Redis-backed API key system with scope-based permissions
 - **Job Leasing**: Workers lease jobs with configurable timeouts
 - **Automatic Retries**: Failed jobs automatically retry until max attempts
 - **Dead Letter Queue**: Jobs that exhaust retries move to DEAD state
@@ -41,13 +42,63 @@ go build -o queue-server cmd/server/main.go
 ./queue-server
 ```
 
+## Authentication
+
+All API endpoints (except `/health`) require authentication via API keys.
+
+### Key Types
+
+- **Client Keys**: Can submit jobs and read job status
+- **Worker Keys**: Can lease and acknowledge jobs
+- **Admin Keys**: Full access to all operations
+
+### Getting Development Keys
+
+On first startup, the server automatically seeds three development API keys:
+
+```bash
+# Access Redis CLI
+docker exec -it job-queue-redis redis-cli
+
+# List all API keys
+SMEMBERS keys:active
+
+# Get key details (replace with actual key from above)
+HGETALL api_key:client_<key_value>
+HGETALL api_key:worker_<key_value>
+HGETALL api_key:admin_<key_value>
+```
+
+Or check server logs on startup for the seeded keys:
+
+```bash
+docker-compose logs queue | grep "Created"
+```
+
+You'll see output like:
+```
+Created client key: client_abc123... (owner: dev-client)
+Created worker key: worker_xyz789... (owner: dev-worker)
+Created admin key: admin_def456... (owner: dev-admin)
+```
+
 ## API Usage
+
+All requests require an `Authorization` header with a Bearer token:
+
+```bash
+Authorization: Bearer <api_key>
+```
 
 ### 1. Submit a Job
 
 ```bash
+# Get client key from logs or Redis (see Authentication section)
+CLIENT_KEY="client_abc123..."
+
 curl -X POST http://localhost:8080/jobs \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $CLIENT_KEY" \
   -d '{"payload":"process this data","max_retries":3}'
 
 # Response:
@@ -57,7 +108,11 @@ curl -X POST http://localhost:8080/jobs \
 ### 2. Lease a Job (Worker)
 
 ```bash
-curl -X POST http://localhost:8080/jobs/lease
+# Get worker key from logs or Redis
+WORKER_KEY="worker_xyz789..."
+
+curl -X POST http://localhost:8080/jobs/lease \
+  -H "Authorization: Bearer $WORKER_KEY"
 
 # Response:
 # {
@@ -71,7 +126,16 @@ curl -X POST http://localhost:8080/jobs/lease
 ### 3. Acknowledge Completion
 
 ```bash
-curl -X POST http://localhost:8080/jobs/550e8400-e29b-41d4-a716-446655440000/ack
+curl -X POST http://localhost:8080/jobs/550e8400-e29b-41d4-a716-446655440000/ack \
+  -H "Authorization: Bearer $WORKER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"result":"processed successfully"}'
+
+# Or with an error
+curl -X POST http://localhost:8080/jobs/550e8400-e29b-41d4-a716-446655440000/ack \
+  -H "Authorization: Bearer $WORKER_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"result_error":"processing failed"}'  
 
 # Response: 200 OK
 ```
@@ -79,7 +143,9 @@ curl -X POST http://localhost:8080/jobs/550e8400-e29b-41d4-a716-446655440000/ack
 ### 4. Check Job Status
 
 ```bash
-curl http://localhost:8080/jobs/550e8400-e29b-41d4-a716-446655440000
+# Any authenticated key with jobs:read scope can check status
+curl http://localhost:8080/jobs/550e8400-e29b-41d4-a716-446655440000 \
+  -H "Authorization: Bearer $CLIENT_KEY"
 
 # Response:
 # {
@@ -87,7 +153,8 @@ curl http://localhost:8080/jobs/550e8400-e29b-41d4-a716-446655440000
 #   "state": "ACKED",
 #   "attempts": 1,
 #   "max_retries": 3,
-#   "created_at": "2025-12-26T10:00:00Z"
+#   "created_at": "2025-12-26T10:00:00Z",
+#   "result": "processed successfully"
 # }
 ```
 
@@ -125,6 +192,7 @@ docker-compose up
 # Submit some jobs
 curl -X POST http://localhost:8080/jobs \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $CLIENT_KEY" \
   -d '{"payload":"test","max_retries":3}'
 
 # Simulate crash
@@ -133,7 +201,9 @@ docker-compose kill queue
 # Restart
 docker-compose up
 
-# Jobs are recovered! Check the logs
+# Jobs are recovered! Check status
+curl http://localhost:8080/jobs/<job_id> \
+  -H "Authorization: Bearer $CLIENT_KEY"
 ```
 
 ## Running Tests
@@ -147,4 +217,7 @@ go test -cover ./...
 
 # Run specific package tests
 go test -v ./internal/queue/...
+
+# Run integration tests
+go test -v ./test/...
 ```
