@@ -6,7 +6,7 @@ A durable, crash-resistant job queue system built in Go with Write-Ahead Log (WA
 
 - **Durable**: All jobs persisted to disk via Write-Ahead Log
 - **Crash Recovery**: Automatically recovers state on restart
-- **Authentication**: Redis-backed API key system with scope-based permissions
+- **Authentication**: Redis-backed API key system with scope-based permissions ("jobs:submit", "jobs:read")
 - **Job Leasing**: Workers lease jobs with configurable timeouts
 - **Automatic Retries**: Failed jobs automatically retry until max attempts
 - **Dead Letter Queue**: Jobs that exhaust retries move to DEAD state
@@ -157,6 +157,71 @@ curl http://localhost:8080/jobs/550e8400-e29b-41d4-a716-446655440000 \
 #   "result": "processed successfully"
 # }
 ```
+
+---
+
+## Key Management API
+
+### Create New API Key (Admin Only)
+
+```bash
+# Get admin key from logs
+ADMIN_KEY="admin_abc123..."
+
+curl -X POST http://localhost:8080/admin/keys \
+  -H "Authorization: Bearer $ADMIN_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Production Worker",
+    "owner_id": "prod-team",
+    "type": "worker"
+  }'
+
+# Response:
+# {
+#   "key": "worker_xyz...",
+#   "name": "Production Worker",
+#   "owner_id": "prod-team",
+#   "type": "worker",
+#   "scopes": ["jobs:lease", "jobs:ack", "jobs:read", "keys:read"],
+#   "created_at": "2025-12-30T10:00:00Z"
+# }
+```
+
+### List Your API Keys
+
+```bash
+curl http://localhost:8080/keys \
+  -H "Authorization: Bearer $CLIENT_KEY"
+
+# Response: Array of keys owned by your owner_id
+```
+
+### List All API Keys (Admin Only)
+
+```bash
+curl http://localhost:8080/admin/keys \
+  -H "Authorization: Bearer $ADMIN_KEY"
+
+# Response: Array of all keys in the system
+```
+
+### Revoke an API Key
+
+```bash
+# Admins can revoke any key, users can revoke their own keys
+curl -X DELETE http://localhost:8080/keys/client_abc123... \
+  -H "Authorization: Bearer $ADMIN_KEY"
+
+# Response:
+# {
+#   "message": "Key revoked successfully",
+#   "key": "client_abc123...",
+#   "revoked_at": "2025-12-30T10:05:00Z"
+# }
+```
+
+---
 
 ## Job States
 

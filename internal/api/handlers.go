@@ -261,4 +261,23 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 			RequireScope(auth.ScopeJobsRead)(http.HandlerFunc(s.HandleGetJob)).ServeHTTP(w, r)
 		}
 	})))
+
+	// Admin-only: create keys
+	mux.Handle("/admin/keys", authMW(RequireAdmin(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			// Create key - admin only
+			s.HandleCreateKey(w, r)
+		} else if r.Method == http.MethodGet {
+			// List ALL keys - admin only, very sensitive
+			s.HandleListAllKeys(w, r)
+		} else {
+			s.sendError(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	}))))
+
+	// User endpoint: list OWN keys (any authenticated user with keys:read)
+	mux.Handle("/keys", authMW(RequireScope(auth.ScopeKeysRead)(http.HandlerFunc(s.HandleListKeys))))
+
+	// Revoke key: needs scope + ownership check in handler
+	mux.Handle("/keys/", authMW(RequireScope(auth.ScopeKeysRevoke)(http.HandlerFunc(s.HandleRevokeKey))))
 }

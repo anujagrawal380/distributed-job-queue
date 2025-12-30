@@ -136,15 +136,15 @@ func TestDefaultScopes(t *testing.T) {
 		{
 			name:             "client scopes",
 			keyType:          KeyTypeClient,
-			expectedScopes:   []string{ScopeJobsSubmit, ScopeJobsRead},
-			shouldContain:    []string{ScopeJobsSubmit, ScopeJobsRead},
+			expectedScopes:   []string{ScopeJobsSubmit, ScopeJobsRead, ScopeKeysRead, ScopeKeysRevoke},
+			shouldContain:    []string{ScopeJobsSubmit, ScopeJobsRead, ScopeKeysRead, ScopeKeysRevoke},
 			shouldNotContain: []string{ScopeJobsLease, ScopeJobsAck, ScopeKeysCreate},
 		},
 		{
 			name:             "worker scopes",
 			keyType:          KeyTypeWorker,
-			expectedScopes:   []string{ScopeJobsLease, ScopeJobsAck, ScopeJobsRead},
-			shouldContain:    []string{ScopeJobsLease, ScopeJobsAck, ScopeJobsRead},
+			expectedScopes:   []string{ScopeJobsLease, ScopeJobsAck, ScopeJobsRead, ScopeKeysRead, ScopeKeysRevoke},
+			shouldContain:    []string{ScopeJobsLease, ScopeJobsAck, ScopeJobsRead, ScopeKeysRead, ScopeKeysRevoke},
 			shouldNotContain: []string{ScopeJobsSubmit, ScopeKeysCreate},
 		},
 		{

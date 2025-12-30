@@ -2,6 +2,7 @@ package test
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -387,4 +388,244 @@ func TestIntegration_AckJobValidation(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestIntegration_CreateKey tests key creation endpoint
+func TestIntegration_CreateKey(t *testing.T) {
+	server := setupIntegrationTest(t)
+	defer server.Teardown()
+
+	adminKey := server.AdminKey
+
+	tests := []struct {
+		name           string
+		keyData        map[string]string
+		expectedStatus int
+		checkResponse  func(*testing.T, *http.Response)
+	}{
+		{
+			name: "create client key",
+			keyData: map[string]string{
+				"name":     "New Client",
+				"owner_id": "new-user",
+				"type":     "client",
+			},
+			expectedStatus: http.StatusCreated,
+			checkResponse: func(t *testing.T, resp *http.Response) {
+				var result map[string]interface{}
+				json.NewDecoder(resp.Body).Decode(&result)
+				assert.Contains(t, result["key"], "client_")
+				assert.Equal(t, "New Client", result["name"])
+				assert.Equal(t, "new-user", result["owner_id"])
+
+				scopes := result["scopes"].([]interface{})
+				assert.Contains(t, scopes, "jobs:submit")
+				assert.Contains(t, scopes, "jobs:read")
+				assert.Contains(t, scopes, "keys:read")
+			},
+		},
+		{
+			name: "create worker key",
+			keyData: map[string]string{
+				"name":     "New Worker",
+				"owner_id": "new-user",
+				"type":     "worker",
+			},
+			expectedStatus: http.StatusCreated,
+			checkResponse: func(t *testing.T, resp *http.Response) {
+				var result map[string]interface{}
+				json.NewDecoder(resp.Body).Decode(&result)
+				assert.Contains(t, result["key"], "worker_")
+
+				scopes := result["scopes"].([]interface{})
+				assert.Contains(t, scopes, "jobs:lease")
+				assert.Contains(t, scopes, "jobs:ack")
+			},
+		},
+		{
+			name: "create admin key",
+			keyData: map[string]string{
+				"name":     "New Admin",
+				"owner_id": "new-user",
+				"type":     "admin",
+			},
+			expectedStatus: http.StatusCreated,
+			checkResponse: func(t *testing.T, resp *http.Response) {
+				var result map[string]interface{}
+				json.NewDecoder(resp.Body).Decode(&result)
+				assert.Contains(t, result["key"], "admin_")
+
+				scopes := result["scopes"].([]interface{})
+				assert.Contains(t, scopes, "keys:create")
+				assert.Contains(t, scopes, "keys:revoke")
+			},
+		},
+		{
+			name: "missing name",
+			keyData: map[string]string{
+				"owner_id": "new-user",
+				"type":     "client",
+			},
+			expectedStatus: http.StatusBadRequest,
+			checkResponse: func(t *testing.T, resp *http.Response) {
+				assert.Contains(t, readBody(resp), "name is required")
+			},
+		},
+		{
+			name: "invalid type",
+			keyData: map[string]string{
+				"name":     "Test",
+				"owner_id": "new-user",
+				"type":     "invalid",
+			},
+			expectedStatus: http.StatusBadRequest,
+			checkResponse: func(t *testing.T, resp *http.Response) {
+				assert.Contains(t, readBody(resp), "invalid type")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := server.CreateKeyRaw(adminKey, tt.keyData)
+			assert.Equal(t, tt.expectedStatus, resp.StatusCode)
+			if tt.checkResponse != nil {
+				tt.checkResponse(t, resp)
+			}
+		})
+	}
+}
+
+// TestIntegration_ListKeys tests listing own keys
+func TestIntegration_ListKeys(t *testing.T) {
+	server := setupIntegrationTest(t)
+	defer server.Teardown()
+
+	adminKey := server.AdminKey
+
+	// Create multiple keys for same owner
+	server.CreateKey(adminKey, "Key 1", "owner-a", "client")
+	server.CreateKey(adminKey, "Key 2", "owner-a", "worker")
+	server.CreateKey(adminKey, "Key 3", "owner-b", "client")
+
+	// List keys for owner-a (need to create a key owned by owner-a to test)
+	ownerAKey := server.CreateKey(adminKey, "Owner A Key", "owner-a", "client")
+
+	resp := server.ListKeysRaw(ownerAKey)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var keys []map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&keys)
+
+	// Should see 3 keys (2 created + 1 used for auth)
+	assert.GreaterOrEqual(t, len(keys), 3)
+
+	// All keys should belong to owner-a
+	for _, key := range keys {
+		assert.Equal(t, "owner-a", key["owner_id"])
+	}
+}
+
+// TestIntegration_ListAllKeys tests admin listing all keys
+func TestIntegration_ListAllKeys(t *testing.T) {
+	server := setupIntegrationTest(t)
+	defer server.Teardown()
+
+	adminKey := server.AdminKey
+	clientKey := server.ClientKey
+
+	// Admin can list all keys
+	resp := server.ListAllKeysRaw(adminKey)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var keys []map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&keys)
+
+	// Should include at least test client, worker, admin keys
+	assert.GreaterOrEqual(t, len(keys), 3)
+
+	// Client cannot list all keys
+	resp = server.ListAllKeysRaw(clientKey)
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	assert.Contains(t, readBody(resp), "Admin access required")
+}
+
+// TestIntegration_RevokeKey tests key revocation
+func TestIntegration_RevokeKey(t *testing.T) {
+	server := setupIntegrationTest(t)
+	defer server.Teardown()
+
+	adminKey := server.AdminKey
+
+	// Create a key to revoke
+	newKey := server.CreateKey(adminKey, "Temp Key", "test-user", "client")
+
+	// Admin can revoke any key
+	resp := server.RevokeKeyRaw(adminKey, newKey)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Contains(t, readBody(resp), "Key revoked successfully")
+
+	// Try to use revoked key
+	resp = server.SubmitJobRaw(newKey, "test", 3)
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	assert.Contains(t, readBody(resp), "revoked")
+}
+
+// TestIntegration_RevokeOwnKey tests users revoking their own keys
+func TestIntegration_RevokeOwnKey(t *testing.T) {
+	server := setupIntegrationTest(t)
+	defer server.Teardown()
+
+	adminKey := server.AdminKey
+
+	// Create two keys for same owner
+	key1 := server.CreateKey(adminKey, "Key 1", "owner-a", "client")
+	key2 := server.CreateKey(adminKey, "Key 2", "owner-a", "client")
+
+	// User can revoke their own key using another key they own
+	resp := server.RevokeKeyRaw(key1, key2)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	// Verify key2 is revoked
+	resp = server.SubmitJobRaw(key2, "test", 3)
+	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+}
+
+// TestIntegration_CannotRevokeOthersKeys tests authorization for revoke
+func TestIntegration_CannotRevokeOthersKeys(t *testing.T) {
+	server := setupIntegrationTest(t)
+	defer server.Teardown()
+
+	adminKey := server.AdminKey
+
+	// Create keys for different owners
+	ownerAKey := server.CreateKey(adminKey, "Owner A", "owner-a", "client")
+	ownerBKey := server.CreateKey(adminKey, "Owner B", "owner-b", "client")
+
+	// Owner A cannot revoke Owner B's key
+	resp := server.RevokeKeyRaw(ownerAKey, ownerBKey)
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	assert.Contains(t, readBody(resp), "access denied")
+
+	// Owner B's key should still work
+	resp = server.ListKeysRaw(ownerBKey)
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+}
+
+// TestIntegration_ClientCannotCreateKeys tests permission enforcement
+func TestIntegration_ClientCannotCreateKeys(t *testing.T) {
+	server := setupIntegrationTest(t)
+	defer server.Teardown()
+
+	clientKey := server.ClientKey
+
+	// Client tries to create key (should fail)
+	resp := server.CreateKeyRaw(clientKey, map[string]string{
+		"name":     "Hacker Key",
+		"owner_id": "hacker",
+		"type":     "admin",
+	})
+
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	assert.Contains(t, readBody(resp), "Admin access required")
 }

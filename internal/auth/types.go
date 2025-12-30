@@ -53,9 +53,9 @@ func (k *APIKey) HasScope(scope string) bool {
 func DefaultScopes(keyType KeyType) []string {
 	switch keyType {
 	case KeyTypeClient:
-		return []string{ScopeJobsSubmit, ScopeJobsRead}
+		return []string{ScopeJobsSubmit, ScopeJobsRead, ScopeKeysRead, ScopeKeysRevoke}
 	case KeyTypeWorker:
-		return []string{ScopeJobsLease, ScopeJobsAck, ScopeJobsRead}
+		return []string{ScopeJobsLease, ScopeJobsAck, ScopeJobsRead, ScopeKeysRead, ScopeKeysRevoke}
 	case KeyTypeAdmin:
 		return []string{
 			ScopeJobsSubmit, ScopeJobsRead, ScopeJobsLease, ScopeJobsAck,

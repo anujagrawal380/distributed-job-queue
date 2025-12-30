@@ -236,3 +236,61 @@ func readBody(resp *http.Response) string {
 	resp.Body.Close()
 	return string(body)
 }
+
+// CreateKey creates a new API key and returns the key string
+func (s *IntegrationTestServer) CreateKey(apiKey, name, ownerID, keyType string) string {
+	resp := s.CreateKeyRaw(apiKey, map[string]string{
+		"name":     name,
+		"owner_id": ownerID,
+		"type":     keyType,
+	})
+	if resp.StatusCode != http.StatusCreated {
+		panic(fmt.Sprintf("CreateKey failed: %d - %s", resp.StatusCode, readBody(resp)))
+	}
+
+	var result map[string]interface{}
+	json.NewDecoder(resp.Body).Decode(&result)
+	return result["key"].(string)
+}
+
+// CreateKeyRaw creates a new API key and returns the raw response
+func (s *IntegrationTestServer) CreateKeyRaw(apiKey string, keyData map[string]string) *http.Response {
+	jsonData, _ := json.Marshal(keyData)
+	req := httptest.NewRequest("POST", "/admin/keys", bytes.NewBuffer(jsonData))
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	rr := httptest.NewRecorder()
+	s.Handler.ServeHTTP(rr, req)
+	return rr.Result()
+}
+
+// ListKeysRaw lists own keys and returns the raw response
+func (s *IntegrationTestServer) ListKeysRaw(apiKey string) *http.Response {
+	req := httptest.NewRequest("GET", "/keys", nil)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	rr := httptest.NewRecorder()
+	s.Handler.ServeHTTP(rr, req)
+	return rr.Result()
+}
+
+// ListAllKeysRaw lists all keys (admin only) and returns the raw response
+func (s *IntegrationTestServer) ListAllKeysRaw(apiKey string) *http.Response {
+	req := httptest.NewRequest("GET", "/admin/keys", nil)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	rr := httptest.NewRecorder()
+	s.Handler.ServeHTTP(rr, req)
+	return rr.Result()
+}
+
+// RevokeKeyRaw revokes a key and returns the raw response
+func (s *IntegrationTestServer) RevokeKeyRaw(apiKey, keyToRevoke string) *http.Response {
+	req := httptest.NewRequest("DELETE", "/keys/"+keyToRevoke, nil)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	rr := httptest.NewRecorder()
+	s.Handler.ServeHTTP(rr, req)
+	return rr.Result()
+}
