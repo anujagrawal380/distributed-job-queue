@@ -14,7 +14,7 @@ type Store interface {
 	CreateKey(ctx context.Context, key *APIKey) error
 	GetKey(ctx context.Context, apiKey string) (*APIKey, error)
 	RevokeKey(ctx context.Context, apiKey string) error
-	ListKeys(ctx context.Context, clientID string) ([]*APIKey, error)
+	ListKeys(ctx context.Context, ownerID string) ([]*APIKey, error)
 	ListAllKeys(ctx context.Context) ([]*APIKey, error)
 	UpdateLastUsed(ctx context.Context, apiKey string) error
 }
