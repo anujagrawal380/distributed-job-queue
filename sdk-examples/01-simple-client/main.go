@@ -10,7 +10,7 @@ import (
 
 func main() {
 	// Create a client with your API key
-	client := sdk.NewClient("http://localhost:8080", "client_4LYNHR89BB1UCUqKcK3WHoM9IupFS_js")
+	client := sdk.NewClient("http://localhost:8080", "your-client-api-key")
 
 	// Submit a simple job
 	jobID, err := client.Submit("process-image:photo.jpg", 3)

@@ -86,16 +86,9 @@ func (s *Server) HandleCreateKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Validate key type
-	var keyType auth.KeyType
-	switch req.Type {
-	case "client":
-		keyType = auth.KeyTypeClient
-	case "worker":
-		keyType = auth.KeyTypeWorker
-	case "admin":
-		keyType = auth.KeyTypeAdmin
-	default:
-		s.sendError(w, "invalid type: must be 'client', 'worker', or 'admin'", http.StatusBadRequest)
+	keyType, err := auth.ValidateKeyType(req.Type)
+	if err != nil {
+		s.sendError(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 

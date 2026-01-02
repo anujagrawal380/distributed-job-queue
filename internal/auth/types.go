@@ -1,6 +1,9 @@
 package auth
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // KeyType represents the type of API key
 type KeyType string
@@ -64,4 +67,23 @@ func DefaultScopes(keyType KeyType) []string {
 	default:
 		return []string{}
 	}
+}
+
+// IsValid checks if the KeyType is one of the allowed values
+func (kt KeyType) IsValid() bool {
+	switch kt {
+	case KeyTypeClient, KeyTypeWorker, KeyTypeAdmin:
+		return true
+	default:
+		return false
+	}
+}
+
+// ValidateKeyType checks if a string is a valid KeyType
+func ValidateKeyType(s string) (KeyType, error) {
+	kt := KeyType(s)
+	if !kt.IsValid() {
+		return "", fmt.Errorf("invalid key type: %q (must be 'client', 'worker', or 'admin')", s)
+	}
+	return kt, nil
 }

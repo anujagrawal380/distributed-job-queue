@@ -18,7 +18,7 @@ func main() {
 	// Create a worker with your API key
 	worker := sdk.NewWorker(
 		"http://localhost:8080",
-		"admin_FaWJMDV-_UsyGZnoFoeqowEh9CZZkLdJ",
+		"your-worker-api-key",
 		processJob,
 		sdk.WithPollInterval(2*time.Second),
 		sdk.WithMaxConcurrent(5),

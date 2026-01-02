@@ -8,7 +8,7 @@ data/
 *.log
 
 # Docs
-docs/
+docs/progress.md
 
 # Go
 vendor/

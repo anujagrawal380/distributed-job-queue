@@ -1,11 +1,12 @@
 # Distributed Job Queue
 
-A durable, crash-resistant job queue system built in Go with Write-Ahead Log (WAL) for guaranteed persistence.
+A durable, crash-resistant job queue system built in Go with Write-Ahead Log (WAL) for guaranteed persistence, Redis-backed authentication and an easy-to-use Go [SDK](docs/GO-SDK.md).
 
 ## Features
 
 - **Durable**: All jobs persisted to disk via Write-Ahead Log
 - **Crash Recovery**: Automatically recovers state on restart
+- **Go SDK**: Easy-to-use client and worker libraries for Go applications
 - **Authentication**: Redis-backed API key system with scope-based permissions ("jobs:submit", "jobs:read")
 - **Job Leasing**: Workers lease jobs with configurable timeouts
 - **Automatic Retries**: Failed jobs automatically retry until max attempts
@@ -236,6 +237,47 @@ READY → RUNNING → ACKED ✓
 - **ACKED**: Job completed successfully
 - **RETRY**: Job lease expired, will retry
 - **DEAD**: Job exhausted all retries
+
+---
+
+## Go SDK
+
+Programmatic access for submitting and processing jobs.
+
+### Installation
+
+```bash
+go get github.com/anujagrawal380/distributed-job-queue/pkg/sdk
+```
+
+### Quick Example
+
+**Client** (submit jobs):
+```go
+import "github.com/anujagrawal380/distributed-job-queue/pkg/sdk"
+
+client := sdk.NewClient("http://localhost:8080", "your-client-key")
+jobID, _ := client.Submit("process-data", 3)
+job, _ := client.WaitForCompletion(jobID, 60*time.Second)
+```
+
+**Worker** (process jobs):
+```go
+worker := sdk.NewWorker(
+    "http://localhost:8080",
+    "your-worker-key",
+    func(ctx context.Context, job *sdk.LeasedJob) *sdk.JobResult {
+        // Do work
+        return sdk.Success("result")
+    },
+)
+worker.Run(context.Background())
+```
+
+**[Full SDK Documentation](docs/GO-SDK.md)**  
+**[SDK Examples](sdk-examples/)**
+
+---
 
 ## Configuration
 
