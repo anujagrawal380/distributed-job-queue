@@ -1,0 +1,917 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Distributed Job Queue — Live Dashboard</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --bg:        #080c18;
+      --surface:   #0e1428;
+      --border:    rgba(99,179,237,0.12);
+      --accent:    #63b3ed;
+      --cyan:      #0bc5ea;
+      --green:     #48bb78;
+      --orange:    #ed8936;
+      --red:       #fc8181;
+      --purple:    #b794f4;
+      --yellow:    #f6e05e;
+      --text:      #e2e8f0;
+      --muted:     #718096;
+      --ready:     #63b3ed;
+      --running:   #b794f4;
+      --acked:     #48bb78;
+      --retry:     #ed8936;
+      --dead:      #fc8181;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', sans-serif;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* ── Animated background grid ── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(99,179,237,0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(99,179,237,0.03) 1px, transparent 1px);
+      background-size: 40px 40px;
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    /* ── Header ── */
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      background: rgba(8,12,24,0.85);
+      backdrop-filter: blur(20px);
+      border-bottom: 1px solid var(--border);
+      padding: 0 2rem;
+      height: 64px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .logo {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .logo-icon {
+      width: 36px; height: 36px;
+      background: linear-gradient(135deg, var(--cyan), var(--purple));
+      border-radius: 10px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 18px;
+      box-shadow: 0 0 20px rgba(11,197,234,0.4);
+    }
+
+    .logo h1 {
+      font-size: 1.1rem;
+      font-weight: 700;
+      background: linear-gradient(90deg, var(--cyan), var(--purple));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+    }
+
+    .logo span { font-size: 0.7rem; color: var(--muted); display: block; font-weight: 400; }
+
+    .server-status {
+      display: flex; align-items: center; gap: 8px;
+      background: rgba(14,20,40,0.8);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 6px 14px;
+      font-size: 0.78rem;
+      font-weight: 500;
+    }
+
+    .status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: var(--muted);
+      transition: background 0.3s;
+    }
+    .status-dot.online  { background: var(--green); box-shadow: 0 0 8px var(--green); animation: pulse 2s infinite; }
+    .status-dot.offline { background: var(--red);   box-shadow: 0 0 8px var(--red); }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50%       { opacity: 0.4; }
+    }
+
+    /* ── Main layout ── */
+    main {
+      position: relative;
+      z-index: 1;
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 2rem;
+      display: grid;
+      gap: 1.5rem;
+    }
+
+    /* ── Stats bar ── */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 1rem;
+    }
+
+    .stat-card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 1.2rem 1.4rem;
+      position: relative;
+      overflow: hidden;
+      transition: transform 0.2s, box-shadow 0.2s;
+      cursor: default;
+    }
+    .stat-card::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(135deg, var(--color) 0%, transparent 60%);
+      opacity: 0.07;
+    }
+    .stat-card:hover { transform: translateY(-2px); box-shadow: 0 8px 30px rgba(0,0,0,0.3); }
+
+    .stat-label {
+      font-size: 0.72rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--color);
+      margin-bottom: 0.5rem;
+    }
+
+    .stat-value {
+      font-size: 2.2rem;
+      font-weight: 800;
+      font-family: 'JetBrains Mono', monospace;
+      color: var(--color);
+      line-height: 1;
+      text-shadow: 0 0 20px var(--color);
+      transition: all 0.3s;
+    }
+
+    .stat-card.ready   { --color: var(--ready); }
+    .stat-card.running { --color: var(--running); }
+    .stat-card.acked   { --color: var(--acked); }
+    .stat-card.retry   { --color: var(--retry); }
+    .stat-card.dead    { --color: var(--dead); }
+
+    /* ── Two-col layout ── */
+    .content-grid {
+      display: grid;
+      grid-template-columns: 360px 1fr;
+      gap: 1.5rem;
+      align-items: start;
+    }
+
+    /* ── Panel ── */
+    .panel {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 20px;
+      overflow: hidden;
+    }
+
+    .panel-header {
+      padding: 1.2rem 1.5rem;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .panel-title {
+      font-size: 0.85rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--accent);
+    }
+
+    .panel-body { padding: 1.5rem; }
+
+    /* ── Submit form ── */
+    .form-group { margin-bottom: 1rem; }
+
+    .form-label {
+      display: block;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--muted);
+      margin-bottom: 0.5rem;
+    }
+
+    .form-input, .form-textarea, .form-select {
+      width: 100%;
+      background: rgba(0,0,0,0.3);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.75rem 1rem;
+      color: var(--text);
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.85rem;
+      outline: none;
+      transition: border-color 0.2s, box-shadow 0.2s;
+      resize: vertical;
+    }
+    .form-input:focus, .form-textarea:focus, .form-select:focus {
+      border-color: var(--cyan);
+      box-shadow: 0 0 0 3px rgba(11,197,234,0.15);
+    }
+
+    .form-textarea { min-height: 80px; }
+
+    .form-row {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 0.75rem;
+    }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 0.75rem 1.25rem;
+      border-radius: 10px;
+      border: none;
+      cursor: pointer;
+      font-family: 'Inter', sans-serif;
+      font-size: 0.85rem;
+      font-weight: 600;
+      transition: all 0.2s;
+      width: 100%;
+    }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    .btn-primary {
+      background: linear-gradient(135deg, var(--cyan), var(--purple));
+      color: #fff;
+      box-shadow: 0 4px 15px rgba(11,197,234,0.3);
+    }
+    .btn-primary:hover:not(:disabled) {
+      box-shadow: 0 6px 25px rgba(11,197,234,0.5);
+      transform: translateY(-1px);
+    }
+    .btn-primary:active:not(:disabled) { transform: translateY(0); }
+
+    .btn-worker {
+      background: linear-gradient(135deg, var(--purple), var(--running));
+      color: #fff;
+      box-shadow: 0 4px 15px rgba(183,148,244,0.3);
+    }
+    .btn-worker:hover:not(:disabled) {
+      box-shadow: 0 6px 25px rgba(183,148,244,0.5);
+      transform: translateY(-1px);
+    }
+
+    .btn-danger {
+      background: rgba(252,129,129,0.12);
+      border: 1px solid rgba(252,129,129,0.3);
+      color: var(--red);
+    }
+    .btn-danger:hover:not(:disabled) { background: rgba(252,129,129,0.2); }
+
+    .btn-sm { width: auto; padding: 0.4rem 0.9rem; font-size: 0.78rem; }
+
+    /* ── Job Board ── */
+    .board-columns {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 1rem;
+    }
+
+    .board-col-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.75rem 1rem;
+      border-radius: 10px;
+      margin-bottom: 0.75rem;
+      font-size: 0.75rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+    }
+
+    .col-ready   .board-col-header { background: rgba(99,179,237,0.1);  color: var(--ready); }
+    .col-running .board-col-header { background: rgba(183,148,244,0.1); color: var(--running); }
+    .col-acked   .board-col-header { background: rgba(72,187,120,0.1);  color: var(--acked); }
+    .col-retry   .board-col-header { background: rgba(237,137,54,0.1);  color: var(--retry); }
+    .col-dead    .board-col-header { background: rgba(252,129,129,0.1); color: var(--dead); }
+
+    .col-count {
+      background: rgba(255,255,255,0.1);
+      border-radius: 999px;
+      padding: 1px 8px;
+      font-size: 0.72rem;
+    }
+
+    .job-list { display: flex; flex-direction: column; gap: 0.6rem; min-height: 60px; }
+
+    /* ── Job Card ── */
+    .job-card {
+      background: rgba(0,0,0,0.25);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 0.75rem 1rem;
+      font-size: 0.8rem;
+      position: relative;
+      overflow: hidden;
+      animation: slideIn 0.35s cubic-bezier(0.34,1.56,0.64,1);
+      transition: all 0.2s;
+    }
+
+    .job-card::before {
+      content: '';
+      position: absolute;
+      left: 0; top: 0; bottom: 0;
+      width: 3px;
+      background: var(--job-color);
+    }
+
+    .col-ready   .job-card { --job-color: var(--ready); }
+    .col-running .job-card { --job-color: var(--running); }
+    .col-acked   .job-card { --job-color: var(--acked); }
+    .col-retry   .job-card { --job-color: var(--retry); }
+    .col-dead    .job-card { --job-color: var(--dead); }
+
+    .job-card:hover { border-color: var(--job-color); transform: translateX(2px); }
+
+    @keyframes slideIn {
+      from { opacity: 0; transform: translateY(-10px) scale(0.96); }
+      to   { opacity: 1; transform: translateY(0)     scale(1); }
+    }
+
+    .job-id {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem;
+      color: var(--muted);
+      margin-bottom: 0.4rem;
+    }
+
+    .job-payload {
+      font-weight: 600;
+      color: var(--text);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      margin-bottom: 0.35rem;
+    }
+
+    .job-meta {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      font-size: 0.7rem;
+      color: var(--muted);
+    }
+
+    .job-attempts { display: flex; align-items: center; gap: 4px; }
+
+    .running-shimmer {
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(90deg, transparent, rgba(183,148,244,0.06), transparent);
+      animation: shimmer 2s infinite;
+    }
+    @keyframes shimmer {
+      0%   { transform: translateX(-100%); }
+      100% { transform: translateX(100%); }
+    }
+
+    /* ── Activity Log ── */
+    .log-list {
+      height: 200px;
+      overflow-y: auto;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.75rem;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .log-list::-webkit-scrollbar { width: 4px; }
+    .log-list::-webkit-scrollbar-track { background: transparent; }
+    .log-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 99px; }
+
+    .log-entry {
+      display: flex;
+      gap: 10px;
+      padding: 4px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.03);
+      animation: fadeIn 0.2s ease;
+    }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+    .log-time { color: var(--muted); min-width: 60px; }
+    .log-msg  { color: var(--text); }
+    .log-msg.success { color: var(--green); }
+    .log-msg.error   { color: var(--red); }
+    .log-msg.info    { color: var(--cyan); }
+    .log-msg.warn    { color: var(--orange); }
+
+    /* ── Empty state ── */
+    .empty-state {
+      text-align: center;
+      padding: 1.5rem 0;
+      color: var(--muted);
+      font-size: 0.78rem;
+    }
+    .empty-state .icon { font-size: 1.5rem; margin-bottom: 0.5rem; }
+
+    /* ── Toast ── */
+    #toast {
+      position: fixed;
+      bottom: 2rem;
+      right: 2rem;
+      z-index: 999;
+      display: flex;
+      flex-direction: column;
+      gap: 0.5rem;
+    }
+    .toast-item {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 0.9rem 1.2rem;
+      font-size: 0.82rem;
+      font-weight: 500;
+      max-width: 320px;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+      animation: toastIn 0.3s cubic-bezier(0.34,1.56,0.64,1);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    @keyframes toastIn {
+      from { opacity: 0; transform: translateX(40px); }
+      to   { opacity: 1; transform: translateX(0); }
+    }
+    .toast-item.out { animation: toastOut 0.2s ease forwards; }
+    @keyframes toastOut {
+      to { opacity: 0; transform: translateX(40px); }
+    }
+
+    /* ── Controls row ── */
+    .controls-row {
+      display: flex;
+      gap: 0.75rem;
+      margin-bottom: 1rem;
+      align-items: center;
+    }
+
+    .controls-row .spacer { flex: 1; }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 3px 10px;
+      border-radius: 999px;
+      font-size: 0.7rem;
+      font-weight: 600;
+    }
+
+    /* ── Responsive ── */
+    @media (max-width: 1100px) {
+      .stats-grid { grid-template-columns: repeat(3, 1fr); }
+      .content-grid { grid-template-columns: 1fr; }
+      .board-columns { grid-template-columns: repeat(3, 1fr); }
+    }
+    @media (max-width: 700px) {
+      .stats-grid { grid-template-columns: repeat(2, 1fr); }
+      .board-columns { grid-template-columns: repeat(2, 1fr); }
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── Header ── -->
+<header>
+  <div class="logo">
+    <div class="logo-icon">⚡</div>
+    <div>
+      <h1>Distributed Job Queue</h1>
+      <span>Real-Time Dashboard</span>
+    </div>
+  </div>
+  <div class="server-status" id="serverStatus">
+    <div class="status-dot" id="statusDot"></div>
+    <span id="statusText">Connecting…</span>
+  </div>
+</header>
+
+<!-- ── Toast container ── -->
+<div id="toast"></div>
+
+<main>
+
+  <!-- ── Stats ── -->
+  <div class="stats-grid">
+    <div class="stat-card ready">
+      <div class="stat-label">🕐 Ready</div>
+      <div class="stat-value" id="cnt-READY">0</div>
+    </div>
+    <div class="stat-card running">
+      <div class="stat-label">⚙️ Running</div>
+      <div class="stat-value" id="cnt-RUNNING">0</div>
+    </div>
+    <div class="stat-card acked">
+      <div class="stat-label">✅ Completed</div>
+      <div class="stat-value" id="cnt-ACKED">0</div>
+    </div>
+    <div class="stat-card retry">
+      <div class="stat-label">🔁 Retrying</div>
+      <div class="stat-value" id="cnt-RETRY">0</div>
+    </div>
+    <div class="stat-card dead">
+      <div class="stat-label">💀 Dead</div>
+      <div class="stat-value" id="cnt-DEAD">0</div>
+    </div>
+  </div>
+
+  <!-- ── Main content ── -->
+  <div class="content-grid">
+
+    <!-- ── Left: Submit + Worker ── -->
+    <div style="display:flex;flex-direction:column;gap:1.5rem;">
+
+      <!-- Submit Job Panel -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">📤 Submit a Job</span>
+        </div>
+        <div class="panel-body">
+          <div class="form-group">
+            <label class="form-label">Payload</label>
+            <textarea class="form-textarea" id="jobPayload" placeholder="e.g. process-image:photo.jpg&#10;send-email:user@example.com&#10;resize-video:clip.mp4">process-image:photo.jpg</textarea>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label class="form-label">Max Retries</label>
+              <input class="form-input" id="jobRetries" type="number" value="3" min="0" max="10" />
+            </div>
+            <div class="form-group">
+              <label class="form-label">API Key</label>
+              <input class="form-input" id="apiKey" type="text" value="demo-admin-key" />
+            </div>
+          </div>
+          <button class="btn btn-primary" id="submitBtn" onclick="submitJob()">
+            <span>⚡</span> Submit Job
+          </button>
+        </div>
+      </div>
+
+      <!-- Worker Simulation Panel -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">🤖 Worker Simulation</span>
+        </div>
+        <div class="panel-body">
+          <p style="font-size:0.8rem;color:var(--muted);margin-bottom:1rem;line-height:1.6;">
+            Click <strong style="color:var(--purple)">Run Worker Cycle</strong> to simulate a worker:
+            it will lease the next available job, process it for 2 seconds, then acknowledge completion.
+          </p>
+          <button class="btn btn-worker" id="workerBtn" onclick="simulateWorker()">
+            <span>🔄</span> Run Worker Cycle
+          </button>
+          <div style="margin-top:0.75rem;display:flex;gap:0.5rem;">
+            <button class="btn btn-danger btn-sm" onclick="startAutoWorker()" id="autoWorkerBtn">▶ Auto-Worker ON</button>
+            <button class="btn btn-sm" style="background:rgba(255,255,255,0.05);border:1px solid var(--border);color:var(--muted);" onclick="batchSubmit()">📦 Batch (5 jobs)</button>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- ── Right: Job Board + Log ── -->
+    <div style="display:flex;flex-direction:column;gap:1.5rem;">
+
+      <!-- Live Job Board -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">📋 Live Job Board</span>
+          <div style="display:flex;align-items:center;gap:0.5rem;">
+            <span style="font-size:0.7rem;color:var(--muted)">Auto-refresh</span>
+            <span class="badge" style="background:rgba(72,187,120,0.15);color:var(--green);">● 2s</span>
+          </div>
+        </div>
+        <div class="panel-body">
+          <div class="board-columns">
+            <div class="col-ready">
+              <div class="board-col-header">
+                Ready <span class="col-count" id="hdr-READY">0</span>
+              </div>
+              <div class="job-list" id="col-READY">
+                <div class="empty-state"><div class="icon">🕐</div>No jobs yet</div>
+              </div>
+            </div>
+            <div class="col-running">
+              <div class="board-col-header">
+                Running <span class="col-count" id="hdr-RUNNING">0</span>
+              </div>
+              <div class="job-list" id="col-RUNNING">
+                <div class="empty-state"><div class="icon">⚙️</div>No jobs</div>
+              </div>
+            </div>
+            <div class="col-acked">
+              <div class="board-col-header">
+                Done <span class="col-count" id="hdr-ACKED">0</span>
+              </div>
+              <div class="job-list" id="col-ACKED">
+                <div class="empty-state"><div class="icon">✅</div>No jobs</div>
+              </div>
+            </div>
+            <div class="col-retry">
+              <div class="board-col-header">
+                Retry <span class="col-count" id="hdr-RETRY">0</span>
+              </div>
+              <div class="job-list" id="col-RETRY">
+                <div class="empty-state"><div class="icon">🔁</div>No jobs</div>
+              </div>
+            </div>
+            <div class="col-dead">
+              <div class="board-col-header">
+                Dead <span class="col-count" id="hdr-DEAD">0</span>
+              </div>
+              <div class="job-list" id="col-DEAD">
+                <div class="empty-state"><div class="icon">💀</div>No jobs</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Activity Log -->
+      <div class="panel">
+        <div class="panel-header">
+          <span class="panel-title">📡 Activity Log</span>
+          <button class="btn btn-sm" style="background:rgba(255,255,255,0.05);border:1px solid var(--border);color:var(--muted);" onclick="clearLog()">Clear</button>
+        </div>
+        <div class="panel-body" style="padding-top:0.75rem;">
+          <div class="log-list" id="logList"></div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</main>
+
+<script>
+  const API = 'http://localhost:8080';
+  let apiKey = () => document.getElementById('apiKey').value || 'demo-key';
+  const headers = () => ({
+    'Content-Type': 'application/json',
+    'Authorization': 'Bearer ' + apiKey()
+  });
+
+  // Job store: id → job object
+  const jobs = {};
+  let autoWorkerInterval = null;
+  let autoWorkerOn = false;
+
+  /* ──────────── Health check ──────────── */
+  async function checkHealth() {
+    try {
+      const res = await fetch(`${API}/health`);
+      const ok = res.ok;
+      document.getElementById('statusDot').className  = 'status-dot ' + (ok ? 'online' : 'offline');
+      document.getElementById('statusText').textContent = ok ? 'Server Online' : 'Server Offline';
+    } catch {
+      document.getElementById('statusDot').className  = 'status-dot offline';
+      document.getElementById('statusText').textContent = 'Server Unreachable';
+    }
+  }
+
+  /* ──────────── Submit Job ──────────── */
+  async function submitJob() {
+    const payload = document.getElementById('jobPayload').value.trim();
+    const maxRetries = parseInt(document.getElementById('jobRetries').value) || 3;
+    if (!payload) return toast('Payload cannot be empty', 'warn');
+
+    document.getElementById('submitBtn').disabled = true;
+    try {
+      const res = await fetch(`${API}/jobs`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({ payload, max_retries: maxRetries })
+      });
+      const data = await res.json();
+      if (!res.ok) { toast(data.error || 'Submit failed', 'error'); return; }
+      jobs[data.job_id] = { id: data.job_id, payload, state: 'READY', attempts: 0, max_retries: maxRetries };
+      renderBoard();
+      log(`Job submitted: ${short(data.job_id)} — "${payload}"`, 'info');
+      toast(`Job submitted!`, 'success');
+    } catch(e) {
+      toast('Network error: ' + e.message, 'error');
+    } finally {
+      document.getElementById('submitBtn').disabled = false;
+    }
+  }
+
+  /* ──────────── Simulate Worker ──────────── */
+  async function simulateWorker() {
+    document.getElementById('workerBtn').disabled = true;
+    try {
+      // Step 1: Lease
+      const leaseRes = await fetch(`${API}/jobs/lease`, { method: 'POST', headers: headers() });
+      if (leaseRes.status === 404) { log('No jobs available to lease', 'warn'); toast('No jobs to process', 'warn'); return; }
+      const leased = await leaseRes.json();
+      if (!leaseRes.ok) { log(leased.error || 'Lease failed', 'error'); return; }
+
+      log(`Worker leased job ${short(leased.job_id)} — "${leased.payload}"`, 'info');
+      jobs[leased.job_id] = { ...jobs[leased.job_id], ...leased, state: 'RUNNING' };
+      renderBoard();
+
+      // Step 2: Simulate work (2 seconds)
+      await sleep(2000);
+
+      // Step 3: Ack
+      const ackRes = await fetch(`${API}/jobs/${leased.job_id}/ack`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({ result: 'Processed successfully by dashboard worker ✓' })
+      });
+      if (!ackRes.ok) { log('Ack failed', 'error'); return; }
+      jobs[leased.job_id] = { ...jobs[leased.job_id], state: 'ACKED', result: 'Processed successfully' };
+      renderBoard();
+      log(`Worker completed job ${short(leased.job_id)} ✓`, 'success');
+      toast(`Job ${short(leased.job_id)} completed! ✓`, 'success');
+    } catch(e) {
+      toast('Error: ' + e.message, 'error');
+      log('Worker error: ' + e.message, 'error');
+    } finally {
+      document.getElementById('workerBtn').disabled = false;
+    }
+  }
+
+  /* ──────────── Auto-Worker ──────────── */
+  function startAutoWorker() {
+    const btn = document.getElementById('autoWorkerBtn');
+    if (autoWorkerOn) {
+      clearInterval(autoWorkerInterval);
+      autoWorkerOn = false;
+      btn.textContent = '▶ Auto-Worker ON';
+      btn.style.background = 'rgba(252,129,129,0.12)';
+      btn.style.color = 'var(--red)';
+      log('Auto-worker stopped', 'warn');
+    } else {
+      autoWorkerOn = true;
+      btn.textContent = '⏹ Auto-Worker OFF';
+      btn.style.background = 'rgba(72,187,120,0.15)';
+      btn.style.color = 'var(--green)';
+      log('Auto-worker started — polling every 3s', 'success');
+      simulateWorker(); // run immediately
+      autoWorkerInterval = setInterval(simulateWorker, 3000);
+    }
+  }
+
+  /* ──────────── Batch Submit ──────────── */
+  async function batchSubmit() {
+    const payloads = [
+      'resize-image:banner.png',
+      'send-email:user@example.com',
+      'generate-report:q4-2025',
+      'transcode-video:intro.mp4',
+      'backup-database:users_table'
+    ];
+    log('Batch submitting 5 jobs…', 'info');
+    for (const p of payloads) {
+      await fetch(`${API}/jobs`, {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({ payload: p, max_retries: 3 })
+      }).then(r => r.json()).then(data => {
+        if (data.job_id) jobs[data.job_id] = { id: data.job_id, payload: p, state: 'READY', attempts: 0, max_retries: 3 };
+      }).catch(() => {});
+    }
+    renderBoard();
+    toast('5 jobs submitted in batch!', 'success');
+  }
+
+  /* ──────────── Poll job statuses ──────────── */
+  async function refreshJobs() {
+    const ids = Object.keys(jobs);
+    if (ids.length === 0) return;
+    for (const id of ids) {
+      try {
+        const res = await fetch(`${API}/jobs/${id}`, { headers: headers() });
+        if (!res.ok) continue;
+        const data = await res.json();
+        const prev = jobs[id]?.state;
+        jobs[id] = { ...jobs[id], ...data };
+        if (prev && prev !== data.state) {
+          log(`Job ${short(id)}: ${prev} → ${data.state}`, stateLogType(data.state));
+        }
+      } catch {}
+    }
+    renderBoard();
+  }
+
+  /* ──────────── Render Board ──────────── */
+  function renderBoard() {
+    const states = ['READY', 'RUNNING', 'ACKED', 'RETRY', 'DEAD'];
+    const grouped = {};
+    states.forEach(s => grouped[s] = []);
+    Object.values(jobs).forEach(j => { if (grouped[j.state]) grouped[j.state].push(j); });
+
+    states.forEach(state => {
+      const list = grouped[state];
+      document.getElementById('cnt-' + state).textContent = list.length;
+      document.getElementById('hdr-' + state).textContent = list.length;
+
+      const col = document.getElementById('col-' + state);
+      if (list.length === 0) {
+        const icons = { READY:'🕐', RUNNING:'⚙️', ACKED:'✅', RETRY:'🔁', DEAD:'💀' };
+        col.innerHTML = `<div class="empty-state"><div class="icon">${icons[state]}</div>No jobs</div>`;
+        return;
+      }
+
+      col.innerHTML = list.slice().reverse().map(j => `
+        <div class="job-card" title="${j.id}">
+          ${j.state === 'RUNNING' ? '<div class="running-shimmer"></div>' : ''}
+          <div class="job-id">${short(j.id)}</div>
+          <div class="job-payload">${esc(j.payload || '')}</div>
+          <div class="job-meta">
+            <span class="job-attempts">🔄 ${j.attempts || 0}/${j.max_retries ?? '?'}</span>
+            <span>${timeAgo(j.created_at)}</span>
+          </div>
+          ${j.result ? `<div style="margin-top:0.4rem;font-size:0.7rem;color:var(--acked);">✓ ${esc(j.result)}</div>` : ''}
+          ${j.result_error ? `<div style="margin-top:0.4rem;font-size:0.7rem;color:var(--dead);">✗ ${esc(j.result_error)}</div>` : ''}
+        </div>
+      `).join('');
+    });
+  }
+
+  /* ──────────── Activity Log ──────────── */
+  function log(msg, type = 'info') {
+    const list = document.getElementById('logList');
+    const now = new Date().toLocaleTimeString('en-US', { hour12: false, hour:'2-digit', minute:'2-digit', second:'2-digit' });
+    const entry = document.createElement('div');
+    entry.className = 'log-entry';
+    entry.innerHTML = `<span class="log-time">${now}</span><span class="log-msg ${type}">${esc(msg)}</span>`;
+    list.prepend(entry);
+    if (list.children.length > 80) list.removeChild(list.lastChild);
+  }
+  function clearLog() { document.getElementById('logList').innerHTML = ''; }
+
+  /* ──────────── Toast ──────────── */
+  function toast(msg, type = 'info') {
+    const icons = { success:'✅', error:'❌', warn:'⚠️', info:'ℹ️' };
+    const colors = { success: 'var(--green)', error: 'var(--red)', warn: 'var(--orange)', info: 'var(--cyan)' };
+    const el = document.createElement('div');
+    el.className = 'toast-item';
+    el.style.borderLeftColor = colors[type];
+    el.style.borderLeftWidth = '3px';
+    el.innerHTML = `<span>${icons[type]}</span><span>${esc(msg)}</span>`;
+    document.getElementById('toast').appendChild(el);
+    setTimeout(() => { el.classList.add('out'); setTimeout(() => el.remove(), 250); }, 3000);
+  }
+
+  /* ──────────── Helpers ──────────── */
+  const short = id => id ? id.slice(0, 8) + '…' : '?';
+  const sleep  = ms => new Promise(r => setTimeout(r, ms));
+  const esc    = s  => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const stateLogType = s => ({ READY:'info', RUNNING:'info', ACKED:'success', RETRY:'warn', DEAD:'error' })[s] || 'info';
+
+  function timeAgo(ts) {
+    if (!ts) return '';
+    const diff = (Date.now() - new Date(ts)) / 1000;
+    if (diff < 60) return `${Math.round(diff)}s ago`;
+    if (diff < 3600) return `${Math.round(diff/60)}m ago`;
+    return `${Math.round(diff/3600)}h ago`;
+  }
+
+  /* ──────────── Boot ──────────── */
+  checkHealth();
+  setInterval(checkHealth, 5000);
+  setInterval(refreshJobs, 2000);
+
+  log('Dashboard initialised — connected to localhost:8080', 'success');
+  log('Submit a job or click "Batch (5 jobs)" to get started!', 'info');
+</script>
+</body>
+</html>

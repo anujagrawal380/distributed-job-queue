@@ -8,6 +8,20 @@ import (
 	"github.com/anujagrawal380/distributed-job-queue/internal/auth"
 )
 
+// CORSMiddleware adds CORS headers so the web dashboard can call the API from a browser
+func CORSMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // contextKey is a custom type for context keys to avoid collisions
 type contextKey string
 

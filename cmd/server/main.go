@@ -12,9 +12,24 @@ import (
 	"github.com/anujagrawal380/distributed-job-queue/internal/api"
 	"github.com/anujagrawal380/distributed-job-queue/internal/auth"
 	"github.com/anujagrawal380/distributed-job-queue/internal/queue"
-	redisclient "github.com/anujagrawal380/distributed-job-queue/internal/redis"
+	// redisclient "github.com/anujagrawal380/distributed-job-queue/internal/redis"
 	"github.com/anujagrawal380/distributed-job-queue/internal/wal"
 )
+
+type MockStore struct{}
+
+func (m *MockStore) CreateKey(ctx context.Context, key *auth.APIKey) error { return nil }
+func (m *MockStore) GetKey(ctx context.Context, apiKey string) (*auth.APIKey, error) {
+	return &auth.APIKey{
+		Key:    apiKey,
+		Type:   auth.KeyTypeAdmin,
+		Scopes: auth.DefaultScopes(auth.KeyTypeAdmin),
+	}, nil
+}
+func (m *MockStore) RevokeKey(ctx context.Context, apiKey string) error { return nil }
+func (m *MockStore) ListKeys(ctx context.Context, ownerID string) ([]*auth.APIKey, error) { return nil, nil }
+func (m *MockStore) ListAllKeys(ctx context.Context) ([]*auth.APIKey, error) { return nil, nil }
+func (m *MockStore) UpdateLastUsed(ctx context.Context, apiKey string) error { return nil }
 
 func main() {
 	// Read configuration from environment
@@ -32,6 +47,7 @@ func main() {
 	log.Printf("  Lease Check Interval: %v", leaseCheckInterval)
 
 	// Connect to Redis
+	/*
 	redisConfig := &redisclient.Config{
 		URL:            redisURL,
 		MaxRetries:     3,
@@ -59,16 +75,19 @@ func main() {
 				stats.Hits, stats.Misses, stats.Timeouts, stats.TotalConns, stats.IdleConns)
 		}
 	}()
+	*/
 
 	// Create auth store
-	authStore := auth.NewRedisStore(redisClient.GetClient())
-	log.Printf("Auth store initialized")
+	authStore := &MockStore{}
+	log.Printf("Mock Auth store initialized - Redis completely bypassed!")
 
 	// Seed development keys (for DEV testing ONLY)
+	/*
 	ctx := context.Background()
 	if err := auth.SeedDevKeys(ctx, authStore); err != nil {
 		log.Fatalf("Failed to seed dev keys: %v", err)
 	}
+	*/
 
 	// Open WAL
 	w, err := wal.Open(walDir)
@@ -91,10 +110,19 @@ func main() {
 	mux := http.NewServeMux()
 	server.RegisterRoutes(mux)
 
-	// Create HTTP server
+	// Serve the web dashboard at root
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/" {
+			http.ServeFile(w, r, "./dashboard/index.html")
+		} else {
+			http.NotFound(w, r)
+		}
+	})
+
+	// Create HTTP server with CORS middleware wrapping the entire mux
 	httpServer := &http.Server{
 		Addr:    ":" + port,
-		Handler: mux,
+		Handler: api.CORSMiddleware(mux),
 	}
 
 	// Start background goroutine for checking expired leases
