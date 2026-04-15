@@ -6,11 +6,13 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/anujagrawal380/distributed-job-queue/internal/api"
 	"github.com/anujagrawal380/distributed-job-queue/internal/auth"
+	"github.com/anujagrawal380/distributed-job-queue/internal/cluster"
 	"github.com/anujagrawal380/distributed-job-queue/internal/queue"
 	redisclient "github.com/anujagrawal380/distributed-job-queue/internal/redis"
 	"github.com/anujagrawal380/distributed-job-queue/internal/wal"
@@ -70,22 +72,35 @@ func main() {
 		log.Fatalf("Failed to seed dev keys: %v", err)
 	}
 
-	// Open WAL
-	w, err := wal.Open(walDir)
-	if err != nil {
-		log.Fatalf("Failed to open WAL: %v", err)
-	}
-	defer w.Close()
+	// Build backend — cluster mode if CLUSTER_MODE=true, else local WAL-backed core.
+	var (
+		backend api.JobBackend
+		leader  api.LeaderInfo
+		onTick  func()
+		cleanup func()
+	)
 
-	// Create queue core (recovers from WAL)
-	core, err := queue.NewCore(w)
-	if err != nil {
-		log.Fatalf("Failed to create queue core: %v", err)
+	if getEnv("CLUSTER_MODE", "false") == "true" {
+		backend, leader, onTick, cleanup = startClusterMode(walDir, leaseDuration)
+	} else {
+		w, err := wal.Open(walDir)
+		if err != nil {
+			log.Fatalf("Failed to open WAL: %v", err)
+		}
+		core, err := queue.NewCore(w)
+		if err != nil {
+			log.Fatalf("Failed to create queue core: %v", err)
+		}
+		log.Printf("Queue core initialized (WAL recovered)")
+		backend = core
+		leader = nil
+		onTick = core.CheckExpiredLeases
+		cleanup = func() { w.Close() }
 	}
-	log.Printf("Queue core initialized (WAL recovered)")
+	defer cleanup()
 
 	// Create API server
-	server := api.NewServer(core, leaseDuration, authStore)
+	server := api.NewServer(backend, leader, leaseDuration, authStore)
 
 	// Register routes
 	mux := http.NewServeMux()
@@ -108,7 +123,7 @@ func main() {
 		for {
 			select {
 			case <-ticker.C:
-				core.CheckExpiredLeases()
+				onTick()
 			case <-ctx.Done():
 				return
 			}
@@ -142,6 +157,89 @@ func main() {
 	}
 
 	log.Println("Server stopped")
+}
+
+// startClusterMode bootstraps the Raft node and returns a cluster-backed
+// backend. Env vars:
+//   NODE_ID         unique id within the cluster, e.g. "node1"
+//   RAFT_ADDR       TCP address this node binds for Raft, e.g. "0.0.0.0:7000"
+//   PEERS           comma-separated "id@raft-addr", full cluster membership
+//   HTTP_PEERS      comma-separated "id@http-url", for leader redirects
+//   BOOTSTRAP       "true" on the one node that seeds the cluster on first boot
+func startClusterMode(dataDir string, leaseDur time.Duration) (api.JobBackend, api.LeaderInfo, func(), func()) {
+	nodeID := mustEnv("NODE_ID")
+	raftAddr := mustEnv("RAFT_ADDR")
+	peersSpec := mustEnv("PEERS")
+	httpPeersSpec := mustEnv("HTTP_PEERS")
+	bootstrap := getEnv("BOOTSTRAP", "false") == "true"
+
+	peers := parsePeers(peersSpec)
+	httpAddrs := parseHTTPPeers(httpPeersSpec)
+
+	bus := queue.NewEventBus()
+	fsm := cluster.NewFSM(bus)
+
+	node, err := cluster.NewNode(cluster.NodeConfig{
+		NodeID:    nodeID,
+		RaftAddr:  raftAddr,
+		DataDir:   dataDir,
+		Bootstrap: bootstrap,
+		Peers:     peers,
+	}, fsm)
+	if err != nil {
+		log.Fatalf("Failed to start raft node: %v", err)
+	}
+	log.Printf("Raft node started: id=%s addr=%s bootstrap=%v peers=%d", nodeID, raftAddr, bootstrap, len(peers))
+
+	srv := cluster.NewServer(node, bus, httpAddrs)
+	_ = leaseDur
+	return srv, srv, srv.CheckExpiredLeases, func() {
+		if err := node.Shutdown(); err != nil {
+			log.Printf("raft shutdown: %v", err)
+		}
+	}
+}
+
+// parsePeers parses "id1@host:port,id2@host:port" into cluster.Peer slices.
+func parsePeers(s string) []cluster.Peer {
+	out := make([]cluster.Peer, 0)
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		at := strings.IndexByte(p, '@')
+		if at < 0 {
+			log.Fatalf("PEERS entry missing '@': %q", p)
+		}
+		out = append(out, cluster.Peer{ID: p[:at], Addr: p[at+1:]})
+	}
+	return out
+}
+
+// parseHTTPPeers parses "id1@url1,id2@url2" into a map.
+func parseHTTPPeers(s string) map[string]string {
+	out := make(map[string]string)
+	for _, p := range strings.Split(s, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		at := strings.IndexByte(p, '@')
+		if at < 0 {
+			log.Fatalf("HTTP_PEERS entry missing '@': %q", p)
+		}
+		out[p[:at]] = p[at+1:]
+	}
+	return out
+}
+
+func mustEnv(key string) string {
+	v := os.Getenv(key)
+	if v == "" {
+		log.Fatalf("required env var %s is not set", key)
+	}
+	return v
 }
 
 // Helper: get environment variable with default

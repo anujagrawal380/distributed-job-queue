@@ -65,6 +65,28 @@ go run ./cmd/chaos \
 At the end it prints submitted / acked / lost counts, throughput, and p50/p95/p99
 end-to-end latency. Expected output: `result: ZERO LOSS ✓`.
 
+## Raft cluster mode
+
+Single-node mode uses a local WAL. Cluster mode replicates every mutation
+through Raft (hashicorp/raft + BoltDB) so the queue survives the leader dying.
+
+```bash
+docker compose -f docker-compose.cluster.yml up --build
+# Leader election happens within a couple seconds.
+# Find the leader (look for "entering Leader state" in logs), then:
+docker compose -f docker-compose.cluster.yml kill node1
+# One of node2/node3 takes over; writes continue against its HTTP port.
+```
+
+The state machine is deterministic (IDs + timestamps are supplied by the
+leader in the log entry, and lease selection sorts by priority → RunAt →
+CreatedAt → ID as a final tiebreaker), so every replica ends up in the
+same state given the same log.
+
+Env vars for cluster mode: `CLUSTER_MODE=true`, `NODE_ID`, `RAFT_ADDR`,
+`PEERS=id@host:port,...`, `HTTP_PEERS=id@http://url,...`, `BOOTSTRAP=true`
+on one node for first boot.
+
 ## Quick Start
 
 ### Prerequisites

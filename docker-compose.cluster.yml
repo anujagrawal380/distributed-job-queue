@@ -1,0 +1,78 @@
+version: '3.8'
+
+# 3-node Raft cluster for leader-election + failover demos.
+#
+# Usage:
+#   docker compose -f docker-compose.cluster.yml up --build
+# Kill the leader (check logs for "entering Leader state"):
+#   docker compose -f docker-compose.cluster.yml kill node1
+# Observe one of node2/node3 take over; writes continue on the new leader.
+
+x-cluster-env: &cluster-env
+  CLUSTER_MODE: "true"
+  PORT: "8080"
+  WAL_DIR: "/app/data"
+  LEASE_DURATION: "30s"
+  LEASE_CHECK_INTERVAL: "5s"
+  REDIS_URL: "redis:6379"
+  PEERS: "node1@node1:7000,node2@node2:7000,node3@node3:7000"
+  HTTP_PEERS: "node1@http://localhost:8081,node2@http://localhost:8082,node3@http://localhost:8083"
+
+services:
+  node1:
+    build: .
+    container_name: jq-node1
+    ports:
+      - "8081:8080"
+    volumes:
+      - node1-data:/app/data
+    environment:
+      <<: *cluster-env
+      NODE_ID: "node1"
+      RAFT_ADDR: "0.0.0.0:7000"
+      BOOTSTRAP: "true"
+    depends_on:
+      - redis
+
+  node2:
+    build: .
+    container_name: jq-node2
+    ports:
+      - "8082:8080"
+    volumes:
+      - node2-data:/app/data
+    environment:
+      <<: *cluster-env
+      NODE_ID: "node2"
+      RAFT_ADDR: "0.0.0.0:7000"
+    depends_on:
+      - redis
+
+  node3:
+    build: .
+    container_name: jq-node3
+    ports:
+      - "8083:8080"
+    volumes:
+      - node3-data:/app/data
+    environment:
+      <<: *cluster-env
+      NODE_ID: "node3"
+      RAFT_ADDR: "0.0.0.0:7000"
+    depends_on:
+      - redis
+
+  redis:
+    image: redis:7-alpine
+    container_name: jq-cluster-redis
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis-cluster-data:/data
+    command: redis-server --appendonly yes
+
+volumes:
+  node1-data:
+  node2-data:
+  node3-data:
+  redis-cluster-data:

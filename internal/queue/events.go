@@ -22,20 +22,22 @@ type Event struct {
 	State JobState  `json:"state"`
 }
 
-// eventBus is an internal fan-out bus for queue events. Subscribers that can't
+// EventBus is a fan-out bus for queue events. Subscribers that can't
 // keep up have events dropped rather than blocking the producer.
-type eventBus struct {
+type EventBus struct {
 	mu   sync.Mutex
 	subs map[chan Event]struct{}
 }
 
-func newEventBus() *eventBus {
-	return &eventBus{subs: make(map[chan Event]struct{})}
+// NewEventBus creates an empty bus. Multiple buses are fine; each backend
+// owns one and SSE handlers subscribe via the active backend.
+func NewEventBus() *EventBus {
+	return &EventBus{subs: make(map[chan Event]struct{})}
 }
 
 // Subscribe returns a channel of events and an unsubscribe func. The channel
 // is buffered; if a subscriber is slow, events are dropped.
-func (b *eventBus) Subscribe() (<-chan Event, func()) {
+func (b *EventBus) Subscribe() (<-chan Event, func()) {
 	ch := make(chan Event, 128)
 	b.mu.Lock()
 	b.subs[ch] = struct{}{}
@@ -51,7 +53,8 @@ func (b *eventBus) Subscribe() (<-chan Event, func()) {
 	return ch, unsub
 }
 
-func (b *eventBus) publish(e Event) {
+// Publish sends an event to all current subscribers.
+func (b *EventBus) Publish(e Event) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	for ch := range b.subs {

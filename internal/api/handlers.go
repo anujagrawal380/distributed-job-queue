@@ -14,20 +14,38 @@ import (
 	"github.com/anujagrawal380/distributed-job-queue/internal/queue"
 )
 
-// Server holds the queue core and HTTP handlers
+// Server holds the queue backend and HTTP handlers.
 type Server struct {
-	core          *queue.Core
+	core          JobBackend
+	leader        LeaderInfo // optional; nil means single-node (always leader)
 	leaseDuration time.Duration
 	authStore     auth.Store
 }
 
-// NewServer creates a new API server
-func NewServer(core *queue.Core, leaseDuration time.Duration, authStore auth.Store) *Server {
+// NewServer creates a new API server. Pass nil for leader if running single-node.
+func NewServer(core JobBackend, leader LeaderInfo, leaseDuration time.Duration, authStore auth.Store) *Server {
 	return &Server{
 		core:          core,
+		leader:        leader,
 		leaseDuration: leaseDuration,
 		authStore:     authStore,
 	}
+}
+
+// requireLeader enforces that writes go to the current leader. If this node
+// is a follower, redirect to the leader's HTTP address with 307 (preserves
+// method and body).
+func (s *Server) requireLeader(w http.ResponseWriter, r *http.Request) bool {
+	if s.leader == nil || s.leader.IsLeader() {
+		return true
+	}
+	addr := s.leader.LeaderHTTPAddr()
+	if addr == "" {
+		s.sendError(w, "no leader available; cluster is electing", http.StatusServiceUnavailable)
+		return false
+	}
+	http.Redirect(w, r, addr+r.URL.RequestURI(), http.StatusTemporaryRedirect)
+	return false
 }
 
 // SubmitJobRequest represents the job submission request
@@ -83,6 +101,9 @@ func (s *Server) HandleSubmitJob(w http.ResponseWriter, r *http.Request) {
 		s.sendError(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.requireLeader(w, r) {
+		return
+	}
 
 	// Parse request body
 	body, err := io.ReadAll(r.Body)
@@ -135,6 +156,9 @@ func (s *Server) HandleLeaseJob(w http.ResponseWriter, r *http.Request) {
 		s.sendError(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	if !s.requireLeader(w, r) {
+		return
+	}
 
 	// Lease a job
 	job, err := s.core.Lease(s.leaseDuration)
@@ -157,6 +181,9 @@ func (s *Server) HandleLeaseJob(w http.ResponseWriter, r *http.Request) {
 func (s *Server) HandleAckJob(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		s.sendError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if !s.requireLeader(w, r) {
 		return
 	}
 

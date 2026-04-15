@@ -46,7 +46,7 @@ type Core struct {
 	mu   sync.RWMutex
 	jobs map[string]*Job // jobID -> Job
 	wal  *wal.WAL
-	bus  *eventBus
+	bus  *EventBus
 
 	// cumulative counters (protected by mu)
 	totalSubmits uint64
@@ -65,7 +65,7 @@ func NewCore(w *wal.WAL) (*Core, error) {
 	core := &Core{
 		jobs: make(map[string]*Job),
 		wal:  w,
-		bus:  newEventBus(),
+		bus:  NewEventBus(),
 	}
 
 	// Replay WAL to rebuild state
@@ -154,7 +154,7 @@ func (c *Core) SubmitWithOptions(payload []byte, opts SubmitOptions) (string, er
 
 	c.jobs[job.ID] = job
 	c.totalSubmits++
-	c.bus.publish(Event{Kind: EventSubmitted, JobID: job.ID, State: StateReady})
+	c.bus.Publish(Event{Kind: EventSubmitted, JobID: job.ID, State: StateReady})
 
 	return job.ID, nil
 }
@@ -212,7 +212,7 @@ func (c *Core) leaseJob(job *Job, duration time.Duration) (*Job, error) {
 		return nil, err
 	}
 
-	c.bus.publish(Event{Kind: EventLeased, JobID: job.ID, State: StateRunning})
+	c.bus.Publish(Event{Kind: EventLeased, JobID: job.ID, State: StateRunning})
 	return job, nil
 }
 
@@ -257,7 +257,7 @@ func (c *Core) Ack(jobID string, result []byte, resultError string) error {
 	}
 
 	c.totalAcks++
-	c.bus.publish(Event{Kind: EventAcked, JobID: job.ID, State: StateAcked})
+	c.bus.Publish(Event{Kind: EventAcked, JobID: job.ID, State: StateAcked})
 	return nil
 }
 
@@ -298,13 +298,13 @@ func (c *Core) handleExpiredJob(job *Job) {
 		c.totalRetries++
 		// Move back to READY for retry
 		job.State = StateReady
-		c.bus.publish(Event{Kind: EventRetry, JobID: job.ID, State: StateReady})
+		c.bus.Publish(Event{Kind: EventRetry, JobID: job.ID, State: StateReady})
 	} else {
 		job.State = StateDead
 		entry := wal.NewEntry(job.ID, wal.EventJobDead, nil)
 		c.wal.Append(entry)
 		c.totalDead++
-		c.bus.publish(Event{Kind: EventDead, JobID: job.ID, State: StateDead})
+		c.bus.Publish(Event{Kind: EventDead, JobID: job.ID, State: StateDead})
 	}
 	job.UpdatedAt = time.Now()
 }

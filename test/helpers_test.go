@@ -68,7 +68,7 @@ func setupIntegrationTestWithDir(t *testing.T, walDir string) *IntegrationTestSe
 	require.NoError(t, err)
 
 	// Create API server
-	server := api.NewServer(core, 30*time.Second, authStore)
+	server := api.NewServer(core, nil, 30*time.Second, authStore)
 
 	// Register routes
 	mux := http.NewServeMux()

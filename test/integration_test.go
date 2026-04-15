@@ -480,7 +480,7 @@ func TestIntegration_CreateKey(t *testing.T) {
 			},
 			expectedStatus: http.StatusBadRequest,
 			checkResponse: func(t *testing.T, resp *http.Response) {
-				assert.Contains(t, readBody(resp), "invalid type")
+				assert.Contains(t, readBody(resp), "invalid key type")
 			},
 		},
 	}
