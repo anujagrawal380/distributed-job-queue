@@ -176,15 +176,29 @@ func startClusterMode(dataDir string, leaseDur time.Duration) (api.JobBackend, a
 	peers := parsePeers(peersSpec)
 	httpAddrs := parseHTTPPeers(httpPeersSpec)
 
+	// The advertise addr is this node's entry in PEERS — what other nodes
+	// will dial. Bind addr can be 0.0.0.0:7000 while advertise is node1:7000.
+	var advertise string
+	for _, p := range peers {
+		if p.ID == nodeID {
+			advertise = p.Addr
+			break
+		}
+	}
+	if advertise == "" {
+		log.Fatalf("NODE_ID %q not found in PEERS", nodeID)
+	}
+
 	bus := queue.NewEventBus()
 	fsm := cluster.NewFSM(bus)
 
 	node, err := cluster.NewNode(cluster.NodeConfig{
-		NodeID:    nodeID,
-		RaftAddr:  raftAddr,
-		DataDir:   dataDir,
-		Bootstrap: bootstrap,
-		Peers:     peers,
+		NodeID:        nodeID,
+		RaftAddr:      raftAddr,
+		AdvertiseAddr: advertise,
+		DataDir:       dataDir,
+		Bootstrap:     bootstrap,
+		Peers:         peers,
 	}, fsm)
 	if err != nil {
 		log.Fatalf("Failed to start raft node: %v", err)

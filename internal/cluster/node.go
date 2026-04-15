@@ -19,11 +19,12 @@ type Peer struct {
 
 // NodeConfig is the minimum needed to start a Raft node.
 type NodeConfig struct {
-	NodeID    string // unique within the cluster (e.g. "node1")
-	RaftAddr  string // TCP address this node binds, e.g. "0.0.0.0:7000"
-	DataDir   string // where BoltDB + snapshots live
-	Bootstrap bool   // true on exactly one node, on first boot only
-	Peers     []Peer // full cluster membership (used when Bootstrap=true)
+	NodeID       string // unique within the cluster (e.g. "node1")
+	RaftAddr     string // TCP address this node binds, e.g. "0.0.0.0:7000"
+	AdvertiseAddr string // what peers should dial; must match this node's entry in PEERS
+	DataDir      string // where BoltDB + snapshots live
+	Bootstrap    bool   // true on exactly one node, on first boot only
+	Peers        []Peer // full cluster membership (used when Bootstrap=true)
 }
 
 // Node wraps raft.Raft with the stores + transport so the caller can shut
@@ -49,13 +50,15 @@ func NewNode(cfg NodeConfig, fsm *FSM) (*Node, error) {
 	rc.SnapshotInterval = 30 * time.Second
 	rc.SnapshotThreshold = 1024
 
-	addr, err := net.ResolveTCPAddr("tcp", cfg.RaftAddr)
-	if err != nil {
-		return nil, fmt.Errorf("resolve raft addr: %w", err)
+	advertise := cfg.AdvertiseAddr
+	if advertise == "" {
+		advertise = cfg.RaftAddr
 	}
-	// advertiseAddr is what we tell peers to dial; use the configured one
-	// directly (docker-compose service names work here).
-	transport, err := raft.NewTCPTransport(cfg.RaftAddr, addr, 3, 10*time.Second, os.Stderr)
+	advertiseAddr, err := net.ResolveTCPAddr("tcp", advertise)
+	if err != nil {
+		return nil, fmt.Errorf("resolve advertise addr: %w", err)
+	}
+	transport, err := raft.NewTCPTransport(cfg.RaftAddr, advertiseAddr, 3, 10*time.Second, os.Stderr)
 	if err != nil {
 		return nil, fmt.Errorf("tcp transport: %w", err)
 	}
