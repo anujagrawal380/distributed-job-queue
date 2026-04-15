@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/anujagrawal380/distributed-job-queue/internal/auth"
+	"github.com/anujagrawal380/distributed-job-queue/internal/dashboard"
 	"github.com/anujagrawal380/distributed-job-queue/internal/queue"
 )
 
@@ -30,8 +32,11 @@ func NewServer(core *queue.Core, leaseDuration time.Duration, authStore auth.Sto
 
 // SubmitJobRequest represents the job submission request
 type SubmitJobRequest struct {
-	Payload    string `json:"payload"`
-	MaxRetries int    `json:"max_retries"`
+	Payload    string     `json:"payload"`
+	MaxRetries int        `json:"max_retries"`
+	Priority   int        `json:"priority,omitempty"`
+	RunAt      *time.Time `json:"run_at,omitempty"`
+	DelayMs    int64      `json:"delay_ms,omitempty"`
 }
 
 // SubmitJobResponse represents the job submission response
@@ -59,6 +64,8 @@ type JobStatusResponse struct {
 	State       queue.JobState `json:"state"`
 	Attempts    int            `json:"attempts"`
 	MaxRetries  int            `json:"max_retries"`
+	Priority    int            `json:"priority"`
+	RunAt       time.Time      `json:"run_at"`
 	CreatedAt   time.Time      `json:"created_at"`
 	LeaseUntil  *time.Time     `json:"lease_until,omitempty"`
 	Result      string         `json:"result,omitempty"`
@@ -101,8 +108,18 @@ func (s *Server) HandleSubmitJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Submit job
-	jobID, err := s.core.Submit([]byte(req.Payload), req.MaxRetries)
+	// Build submit options
+	opts := queue.SubmitOptions{
+		MaxRetries: req.MaxRetries,
+		Priority:   req.Priority,
+	}
+	if req.RunAt != nil {
+		opts.RunAt = *req.RunAt
+	} else if req.DelayMs > 0 {
+		opts.RunAt = time.Now().Add(time.Duration(req.DelayMs) * time.Millisecond)
+	}
+
+	jobID, err := s.core.SubmitWithOptions([]byte(req.Payload), opts)
 	if err != nil {
 		s.sendError(w, fmt.Sprintf("failed to submit job: %v", err), http.StatusInternalServerError)
 		return
@@ -205,6 +222,8 @@ func (s *Server) HandleGetJob(w http.ResponseWriter, r *http.Request) {
 		State:       job.State,
 		Attempts:    job.Attempts,
 		MaxRetries:  job.MaxRetries,
+		Priority:    job.Priority,
+		RunAt:       job.RunAt,
 		CreatedAt:   job.CreatedAt,
 		LeaseUntil:  leaseUntil,
 		Result:      string(job.Result),
@@ -212,6 +231,98 @@ func (s *Server) HandleGetJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.sendJSON(w, response, http.StatusOK)
+}
+
+// HandleStats returns a snapshot of queue stats for dashboards.
+func (s *Server) HandleStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.sendError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	s.sendJSON(w, s.core.Stats(), http.StatusOK)
+}
+
+// HandleListJobs returns recent jobs, optionally filtered by ?state=.
+func (s *Server) HandleListJobs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.sendError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	q := r.URL.Query()
+	filter := queue.ListFilter{
+		State:  queue.JobState(strings.ToUpper(q.Get("state"))),
+		Limit:  parseIntDefault(q.Get("limit"), 50),
+		Offset: parseIntDefault(q.Get("offset"), 0),
+	}
+	if filter.Limit > 500 {
+		filter.Limit = 500
+	}
+	s.sendJSON(w, s.core.ListJobs(filter), http.StatusOK)
+}
+
+func parseIntDefault(s string, def int) int {
+	if s == "" {
+		return def
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 0 {
+		return def
+	}
+	return n
+}
+
+// HandleEvents streams queue events as Server-Sent Events.
+func (s *Server) HandleEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		s.sendError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		s.sendError(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	events, unsub := s.core.Subscribe()
+	defer unsub()
+
+	// Initial stats push so dashboards paint immediately.
+	if data, err := json.Marshal(s.core.Stats()); err == nil {
+		fmt.Fprintf(w, "event: stats\ndata: %s\n\n", data)
+		flusher.Flush()
+	}
+
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case ev, ok := <-events:
+			if !ok {
+				return
+			}
+			data, err := json.Marshal(ev)
+			if err != nil {
+				continue
+			}
+			fmt.Fprintf(w, "event: job\ndata: %s\n\n", data)
+			flusher.Flush()
+		case <-ticker.C:
+			// periodic stats refresh keeps charts alive even if idle
+			if data, err := json.Marshal(s.core.Stats()); err == nil {
+				fmt.Fprintf(w, "event: stats\ndata: %s\n\n", data)
+				flusher.Flush()
+			}
+		}
+	}
 }
 
 // HandleHealth handles GET /health
@@ -246,9 +357,25 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	authMW := AuthMiddleware(s.authStore)
 
 	// Jobs endpoints (require auth + specific scopes)
-	mux.Handle("/jobs", authMW(RequireScope(auth.ScopeJobsSubmit)(http.HandlerFunc(s.HandleSubmitJob))))
+	// POST /jobs -> submit; GET /jobs -> list
+	mux.Handle("/jobs", authMW(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodPost:
+			RequireScope(auth.ScopeJobsSubmit)(http.HandlerFunc(s.HandleSubmitJob)).ServeHTTP(w, r)
+		case http.MethodGet:
+			RequireScope(auth.ScopeJobsRead)(http.HandlerFunc(s.HandleListJobs)).ServeHTTP(w, r)
+		default:
+			s.sendError(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	})))
 
 	mux.Handle("/jobs/lease", authMW(RequireScope(auth.ScopeJobsLease)(http.HandlerFunc(s.HandleLeaseJob))))
+
+	// Stats: any authenticated read-capable user
+	mux.Handle("/stats", authMW(RequireScope(auth.ScopeJobsRead)(http.HandlerFunc(s.HandleStats))))
+
+	// SSE stream for live dashboard updates
+	mux.Handle("/events", authMW(RequireScope(auth.ScopeJobsRead)(http.HandlerFunc(s.HandleEvents))))
 
 	// Jobs/{id} routes need custom handling (GET vs POST /ack)
 	mux.Handle("/jobs/", authMW(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -280,4 +407,16 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 
 	// Revoke key: needs scope + ownership check in handler
 	mux.Handle("/keys/", authMW(RequireScope(auth.ScopeKeysRevoke)(http.HandlerFunc(s.HandleRevokeKey))))
+
+	// Dashboard UI (public; it gates itself with an API key entered by the user).
+	// Assets live under /ui/, and / redirects to /ui/index.html for a clean entry.
+	dash := dashboard.Handler()
+	mux.Handle("/ui/", http.StripPrefix("/ui/", dash))
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			http.NotFound(w, r)
+			return
+		}
+		http.Redirect(w, r, "/ui/index.html", http.StatusFound)
+	})
 }

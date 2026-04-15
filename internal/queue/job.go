@@ -24,6 +24,8 @@ type Job struct {
 	State       JobState  `json:"state"`
 	MaxRetries  int       `json:"max_retries"`
 	Attempts    int       `json:"attempts"`
+	Priority    int       `json:"priority"`
+	RunAt       time.Time `json:"run_at"`
 	LeaseUntil  time.Time `json:"lease_until,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
@@ -31,23 +33,42 @@ type Job struct {
 	ResultError string    `json:"result_error,omitempty"`
 }
 
-// NewJob creates a new job with default values
-func NewJob(payload []byte, maxRetries int) *Job {
+// SubmitOptions configures a new job. Zero values mean "use default".
+type SubmitOptions struct {
+	MaxRetries int
+	Priority   int       // higher = leased sooner; default 0
+	RunAt      time.Time // job won't lease until this time; zero means now
+}
+
+// NewJob creates a new job with the given options.
+func NewJob(payload []byte, opts SubmitOptions) *Job {
 	now := time.Now()
+	runAt := opts.RunAt
+	if runAt.IsZero() {
+		runAt = now
+	}
 	return &Job{
 		ID:         uuid.New().String(),
 		Payload:    payload,
 		State:      StateReady,
-		MaxRetries: maxRetries,
+		MaxRetries: opts.MaxRetries,
+		Priority:   opts.Priority,
+		RunAt:      runAt,
 		Attempts:   0,
 		CreatedAt:  now,
 		UpdatedAt:  now,
 	}
 }
 
-// CanLease checks if a job can be leased
+// CanLease checks if a job's state allows leasing. Call IsRunnable to also
+// check that its scheduled run time has arrived.
 func (j *Job) CanLease() bool {
 	return j.State == StateReady || j.State == StateRetry
+}
+
+// IsRunnable reports whether the job is leasable right now.
+func (j *Job) IsRunnable(now time.Time) bool {
+	return j.CanLease() && !now.Before(j.RunAt)
 }
 
 // CanAck checks if a job can be acknowledged

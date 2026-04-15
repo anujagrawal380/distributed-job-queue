@@ -1,5 +1,6 @@
 # Binaries
-queue-server
+/queue-server
+/chaos
 *.exe
 
 # Data

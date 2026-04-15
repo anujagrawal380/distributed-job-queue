@@ -6,11 +6,64 @@ A durable, crash-resistant job queue system built in Go with Write-Ahead Log (WA
 
 - **Durable**: All jobs persisted to disk via Write-Ahead Log
 - **Crash Recovery**: Automatically recovers state on restart
+- **Priority & Scheduling**: Submit jobs with priority or a future `run_at` / `delay_ms`
+- **Live Dashboard**: Embedded htmx + SSE console at `/` with real-time throughput, state counts, and a jobs table
+- **Stats & Events**: `/stats` snapshot and `/events` Server-Sent Events stream for dashboards
+- **Chaos Harness**: `cmd/chaos` load-tests the queue while killing & restarting the server, proving zero loss
 - **Go SDK**: Easy-to-use client and worker libraries for Go applications
 - **Authentication**: Redis-backed API key system with scope-based permissions ("jobs:submit", "jobs:read")
 - **Job Leasing**: Workers lease jobs with configurable timeouts
 - **Automatic Retries**: Failed jobs automatically retry until max attempts
 - **Dead Letter Queue**: Jobs that exhaust retries move to DEAD state
+
+## Dashboard
+
+Open `http://localhost:8080/` in your browser. Paste any API key with the
+`jobs:read` scope and you'll get a live console showing:
+
+- queue totals (runnable / running / scheduled / dead)
+- submits/sec and acks/sec throughput sparkline
+- recent jobs with state pills
+- an inline form to enqueue test jobs (with priority, delay, retries)
+
+The page keeps the key in `localStorage` and streams updates over SSE
+(`/events`). No build step — the whole UI is embedded in the server binary.
+
+## Priority & delayed jobs
+
+`POST /jobs` accepts:
+
+```json
+{
+  "payload": "process this",
+  "max_retries": 3,
+  "priority": 10,
+  "delay_ms": 5000
+}
+```
+
+or absolute scheduling: `"run_at": "2026-04-16T12:34:00Z"`. Higher
+priority jobs lease first; at the same priority, older jobs win (FIFO).
+Jobs with a future `run_at` are skipped by `POST /jobs/lease` until their
+time arrives.
+
+## Chaos harness
+
+`cmd/chaos` submits a load, runs workers, and optionally kills & restarts
+the server repeatedly to prove durability:
+
+```bash
+go run ./cmd/chaos \
+  -target http://localhost:8080 \
+  -key admin_... \
+  -jobs 10000 -workers 16 \
+  -kills 20 -kill-interval 2s \
+  -kill-cmd    "docker compose kill queue" \
+  -restart-cmd "docker compose up -d queue"
+```
+
+At the end it prints submitted / acked / lost counts, throughput, and p50/p95/p99
+end-to-end latency. Expected output: `result: ZERO LOSS ✓`.
 
 ## Quick Start
 

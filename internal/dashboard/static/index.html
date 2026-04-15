@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Job Queue · Console</title>
+<link rel="stylesheet" href="/ui/style.css">
+</head>
+<body>
+
+<div id="gate" class="gate">
+  <div class="gate-card">
+    <div class="gate-brand">
+      <svg viewBox="0 0 24 24" width="28" height="28" aria-hidden="true">
+        <path fill="currentColor" d="M4 6h16v2H4zM4 11h10v2H4zM4 16h16v2H4z"/>
+      </svg>
+      <span>queue<span class="accent">.</span>console</span>
+    </div>
+    <h1>Connect</h1>
+    <p class="muted">Paste an API key with <code>jobs:read</code> to start streaming.</p>
+    <form id="gate-form">
+      <input id="token-input" type="password" autocomplete="off" placeholder="client_… or admin_…" required>
+      <button type="submit">Connect</button>
+    </form>
+    <p class="gate-hint muted">Key is kept in this browser only.</p>
+  </div>
+</div>
+
+<header class="topbar" hidden>
+  <div class="brand">
+    <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+      <path fill="currentColor" d="M4 6h16v2H4zM4 11h10v2H4zM4 16h16v2H4z"/>
+    </svg>
+    <span>queue<span class="accent">.</span>console</span>
+  </div>
+  <div class="topbar-right">
+    <span id="stream-indicator" class="pill pill-dim">
+      <span class="dot"></span><span id="stream-label">connecting…</span>
+    </span>
+    <button id="logout" class="ghost">Disconnect</button>
+  </div>
+</header>
+
+<main class="wrap" hidden>
+
+  <section class="stats">
+    <div class="card stat">
+      <div class="stat-label">Total jobs</div>
+      <div class="stat-value" id="s-total">—</div>
+      <div class="stat-sub muted">in memory</div>
+    </div>
+    <div class="card stat">
+      <div class="stat-label">Runnable</div>
+      <div class="stat-value text-ok" id="s-runnable">—</div>
+      <div class="stat-sub muted">leasable now</div>
+    </div>
+    <div class="card stat">
+      <div class="stat-label">Running</div>
+      <div class="stat-value text-run" id="s-running">—</div>
+      <div class="stat-sub muted">leased by workers</div>
+    </div>
+    <div class="card stat">
+      <div class="stat-label">Scheduled</div>
+      <div class="stat-value text-warn" id="s-scheduled">—</div>
+      <div class="stat-sub muted">waiting for run_at</div>
+    </div>
+    <div class="card stat">
+      <div class="stat-label">Dead</div>
+      <div class="stat-value text-err" id="s-dead">—</div>
+      <div class="stat-sub muted">retries exhausted</div>
+    </div>
+  </section>
+
+  <section class="panels">
+    <div class="card chart-card">
+      <div class="card-head">
+        <h2>Throughput</h2>
+        <div class="legend">
+          <span class="legend-item"><span class="swatch swatch-sub"></span>submits/s</span>
+          <span class="legend-item"><span class="swatch swatch-ack"></span>acks/s</span>
+        </div>
+      </div>
+      <canvas id="spark" width="800" height="160"></canvas>
+      <div class="chart-foot muted">
+        <span>submits: <b id="c-submits">0</b></span>
+        <span>acks: <b id="c-acks">0</b></span>
+        <span>retries: <b id="c-retries">0</b></span>
+        <span>dead: <b id="c-dead">0</b></span>
+      </div>
+    </div>
+
+    <div class="card submit-card">
+      <div class="card-head">
+        <h2>Submit job</h2>
+      </div>
+      <form id="submit-form">
+        <label>Payload
+          <textarea name="payload" rows="3" placeholder="job payload">hello world</textarea>
+        </label>
+        <div class="row">
+          <label>Priority
+            <input name="priority" type="number" value="0">
+          </label>
+          <label>Max retries
+            <input name="max_retries" type="number" value="3" min="0">
+          </label>
+          <label>Delay (ms)
+            <input name="delay_ms" type="number" value="0" min="0">
+          </label>
+        </div>
+        <button type="submit">Enqueue</button>
+        <div id="submit-status" class="muted small"></div>
+      </form>
+    </div>
+  </section>
+
+  <section class="card jobs-card">
+    <div class="card-head">
+      <h2>Recent jobs</h2>
+      <div class="filters">
+        <select id="state-filter">
+          <option value="">all states</option>
+          <option value="READY">READY</option>
+          <option value="RUNNING">RUNNING</option>
+          <option value="ACKED">ACKED</option>
+          <option value="RETRY">RETRY</option>
+          <option value="DEAD">DEAD</option>
+        </select>
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table id="jobs-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>State</th>
+            <th>Priority</th>
+            <th>Attempts</th>
+            <th>Run at</th>
+            <th>Updated</th>
+          </tr>
+        </thead>
+        <tbody id="jobs-body">
+          <tr><td colspan="6" class="muted center">loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+</main>
+
+<script src="/ui/app.js"></script>
+</body>
+</html>

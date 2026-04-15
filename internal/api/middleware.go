@@ -22,21 +22,23 @@ const (
 func AuthMiddleware(store auth.Store) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Extract Authorization header
-			authHeader := r.Header.Get("Authorization")
-			if authHeader == "" {
+			// Prefer Authorization header; fall back to ?token= for clients like
+			// browser EventSource that cannot set custom headers.
+			var apiKey string
+			if authHeader := r.Header.Get("Authorization"); authHeader != "" {
+				parts := strings.SplitN(authHeader, " ", 2)
+				if len(parts) != 2 || parts[0] != "Bearer" {
+					http.Error(w, `{"error":"Invalid Authorization header format. Expected: Bearer <token>"}`, http.StatusUnauthorized)
+					return
+				}
+				apiKey = parts[1]
+			} else if q := r.URL.Query().Get("token"); q != "" {
+				apiKey = q
+			} else {
 				http.Error(w, `{"error":"Missing Authorization header"}`, http.StatusUnauthorized)
 				return
 			}
 
-			// Parse "Bearer <token>"
-			parts := strings.SplitN(authHeader, " ", 2)
-			if len(parts) != 2 || parts[0] != "Bearer" {
-				http.Error(w, `{"error":"Invalid Authorization header format. Expected: Bearer <token>"}`, http.StatusUnauthorized)
-				return
-			}
-
-			apiKey := parts[1]
 			if apiKey == "" {
 				http.Error(w, `{"error":"Empty API key"}`, http.StatusUnauthorized)
 				return

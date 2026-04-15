@@ -51,6 +51,14 @@ func NewClient(baseURL, apiKey string, opts ...ClientOption) *Client {
 	return c
 }
 
+// SubmitOptions configures a job submission.
+type SubmitOptions struct {
+	MaxRetries int
+	Priority   int           // higher = leased sooner
+	Delay      time.Duration // wait before job becomes eligible
+	RunAt      time.Time     // overrides Delay if set
+}
+
 // Submit submits a new job to the queue
 func (c *Client) Submit(payload string, maxRetries int) (string, error) {
 	return c.SubmitWithContext(context.Background(), payload, maxRetries)
@@ -58,9 +66,22 @@ func (c *Client) Submit(payload string, maxRetries int) (string, error) {
 
 // SubmitWithContext submits a new job with context
 func (c *Client) SubmitWithContext(ctx context.Context, payload string, maxRetries int) (string, error) {
-	body := map[string]interface{}{
+	return c.SubmitWithOptions(ctx, payload, SubmitOptions{MaxRetries: maxRetries})
+}
+
+// SubmitWithOptions submits a job with priority and scheduling options.
+func (c *Client) SubmitWithOptions(ctx context.Context, payload string, opts SubmitOptions) (string, error) {
+	body := map[string]any{
 		"payload":     payload,
-		"max_retries": maxRetries,
+		"max_retries": opts.MaxRetries,
+	}
+	if opts.Priority != 0 {
+		body["priority"] = opts.Priority
+	}
+	if !opts.RunAt.IsZero() {
+		body["run_at"] = opts.RunAt.UTC().Format(time.RFC3339Nano)
+	} else if opts.Delay > 0 {
+		body["delay_ms"] = opts.Delay.Milliseconds()
 	}
 
 	jsonBody, err := json.Marshal(body)
