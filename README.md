@@ -1,4 +1,5 @@
 # Distributed Job Queue
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/anujagrawal380/distributed-job-queue)
 
 A durable, crash-resistant job queue system built in Go with Write-Ahead Log (WAL) for guaranteed persistence, Redis-backed authentication and an easy-to-use Go [SDK](docs/GO-SDK.md).
 
